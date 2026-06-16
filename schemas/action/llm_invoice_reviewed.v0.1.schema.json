@@ -1,0 +1,32 @@
+{
+  "schema_id": "sequesign.llm_invoice_reviewed.v0.1",
+  "type": "object",
+  "required": ["provider", "model", "invoice_id", "prompt", "review_summary", "concerns"],
+  "properties": {
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "invoice_id": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "review_summary": {
+      "type": "string"
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "raw_response": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

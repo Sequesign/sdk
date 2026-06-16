@@ -1,0 +1,24 @@
+{
+  "schema_id": "sequesign.self_review_completed.v0.1",
+  "type": "object",
+  "required": ["review_status", "checks"],
+  "properties": {
+    "review_status": {
+      "type": "string",
+      "enum": ["passed", "needs_revision", "blocked"]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,23 @@
+{
+  "schema_id": "sequesign.evidence_captured.v0.1",
+  "type": "object",
+  "required": ["evidence_type", "artifact_id", "artifact_hash", "capture_method"],
+  "properties": {
+    "evidence_type": {
+      "type": "string"
+    },
+    "artifact_id": {
+      "type": "string"
+    },
+    "artifact_hash": {
+      "type": "string"
+    },
+    "capture_method": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

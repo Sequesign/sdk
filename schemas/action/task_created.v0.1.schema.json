@@ -1,0 +1,20 @@
+{
+  "schema_id": "sequesign.task_created.v0.1",
+  "type": "object",
+  "required": ["task_id", "description", "delegator_id", "invoice"],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "delegator_id": {
+      "type": "string"
+    },
+    "invoice": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

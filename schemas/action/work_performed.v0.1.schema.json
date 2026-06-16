@@ -1,0 +1,24 @@
+{
+  "schema_id": "sequesign.work_performed.v0.1",
+  "type": "object",
+  "required": ["work_type", "work_summary", "completion_status"],
+  "properties": {
+    "work_type": {
+      "type": "string"
+    },
+    "work_summary": {
+      "type": "string"
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": ["completed", "needs_revision", "blocked"]
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": true
+}

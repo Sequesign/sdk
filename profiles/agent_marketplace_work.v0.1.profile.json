@@ -1,0 +1,31 @@
+{
+  "profile_id": "sequesign.agent_marketplace_work.v0.1",
+  "description": "Agent marketplace work submission profile.",
+  "receipt_mode": "profile_constrained",
+  "allowed_actions": [
+    "task_accepted",
+    "work_performed",
+    "evidence_captured",
+    "self_review_completed",
+    "work_submitted"
+  ],
+  "required_actions": [
+    "task_accepted",
+    "work_performed",
+    "evidence_captured",
+    "self_review_completed",
+    "work_submitted"
+  ],
+  "allowed_transitions": [
+    ["START", "task_accepted"],
+    ["task_accepted", "work_performed"],
+    ["work_performed", "evidence_captured"],
+    ["evidence_captured", "self_review_completed"],
+    ["self_review_completed", "work_submitted"]
+  ],
+  "conditional_requirements": [],
+  "required_attestations": {
+    "work_submitted": ["agent_signature", "witness_signature"]
+  },
+  "allowed_final_actions": ["work_submitted"]
+}

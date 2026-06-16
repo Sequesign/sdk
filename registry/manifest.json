@@ -1,0 +1,82 @@
+{
+  "registry_version": "sequesign.registry.v0.1",
+  "schemas": [
+    {
+      "schema_id": "sequesign.task_created.v0.1",
+      "action_type": "task_created",
+      "path": "schemas/action/task_created.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.policy_checked.v0.1",
+      "action_type": "policy_checked",
+      "path": "schemas/action/policy_checked.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.llm_invoice_reviewed.v0.1",
+      "action_type": "llm_invoice_reviewed",
+      "path": "schemas/action/llm_invoice_reviewed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.human_approval_received.v0.1",
+      "action_type": "human_approval_received",
+      "path": "schemas/action/human_approval_received.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.payment_instruction_created.v0.1",
+      "action_type": "payment_instruction_created",
+      "path": "schemas/action/payment_instruction_created.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.task_accepted.v0.1",
+      "action_type": "task_accepted",
+      "path": "schemas/action/task_accepted.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.work_performed.v0.1",
+      "action_type": "work_performed",
+      "path": "schemas/action/work_performed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.evidence_captured.v0.1",
+      "action_type": "evidence_captured",
+      "path": "schemas/action/evidence_captured.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.self_review_completed.v0.1",
+      "action_type": "self_review_completed",
+      "path": "schemas/action/self_review_completed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.work_submitted.v0.1",
+      "action_type": "work_submitted",
+      "path": "schemas/action/work_submitted.v0.1.schema.json",
+      "hash_alg": "sha256"
+    }
+  ],
+  "profiles": [
+    {
+      "profile_id": "sequesign.invoice_payment.v0.1",
+      "path": "profiles/invoice_payment.v0.1.profile.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "profile_id": "sequesign.invoice_payment.workflow_fail_demo.v0.1",
+      "path": "profiles/invoice_payment.workflow_fail_demo.v0.1.profile.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "profile_id": "sequesign.agent_marketplace_work.v0.1",
+      "path": "profiles/agent_marketplace_work.v0.1.profile.json",
+      "hash_alg": "sha256"
+    }
+  ]
+}

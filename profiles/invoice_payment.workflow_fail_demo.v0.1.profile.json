@@ -1,0 +1,50 @@
+{
+  "profile_id": "sequesign.invoice_payment.workflow_fail_demo.v0.1",
+  "description": "Intentionally failing profile for demo. It requires payment_instruction_created immediately after llm_invoice_reviewed, so the existing human_approval_received step becomes an invalid transition.",
+  "receipt_mode": "profile_constrained",
+  "allowed_actions": [
+    "task_created",
+    "policy_checked",
+    "llm_invoice_reviewed",
+    "human_approval_received",
+    "payment_instruction_created"
+  ],
+  "required_actions": [
+    "task_created",
+    "policy_checked",
+    "llm_invoice_reviewed",
+    "human_approval_received",
+    "payment_instruction_created"
+  ],
+  "allowed_transitions": [
+    [
+      "START",
+      "task_created"
+    ],
+    [
+      "task_created",
+      "policy_checked"
+    ],
+    [
+      "policy_checked",
+      "llm_invoice_reviewed"
+    ],
+    [
+      "llm_invoice_reviewed",
+      "payment_instruction_created"
+    ]
+  ],
+  "conditional_requirements": [],
+  "required_attestations": {
+    "human_approval_received": [
+      "human_signature"
+    ],
+    "payment_instruction_created": [
+      "agent_signature",
+      "witness_signature"
+    ]
+  },
+  "allowed_final_actions": [
+    "payment_instruction_created"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "name": "@sequesign/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK and reference verifier for Sequesign, a protocol for cryptographically verifiable receipts of delegated AI work. Record actions in direct or managed mode, attach verified approver/counterparty identity via registered-key vouching, and verify receipts fully offline.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sequesign/sdk.git"
+  },
+  "homepage": "https://sequesign.com",
+  "keywords": [
+    "sequesign",
+    "receipts",
+    "ai-agents",
+    "audit",
+    "verification",
+    "ed25519",
+    "attestation",
+    "provenance",
+    "vouching"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "main": "./dist/sdk/index.js",
+  "types": "./dist/sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk/index.d.ts",
+      "default": "./dist/sdk/index.js"
+    },
+    "./verify": {
+      "types": "./dist/lib/verify.d.ts",
+      "default": "./dist/lib/verify.js"
+    },
+    "./types": {
+      "types": "./dist/lib/types.d.ts",
+      "default": "./dist/lib/types.js"
+    },
+    "./prepare": {
+      "types": "./dist/sdk/prepare.d.ts",
+      "default": "./dist/sdk/prepare.js"
+    }
+  },
+  "bin": {
+    "sequesign": "./dist/sdk/cli.js"
+  },
+  "files": [
+    "dist",
+    "registry",
+    "schemas",
+    "profiles",
+    "README.md",
+    "NOTICE"
+  ],
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

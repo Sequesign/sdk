@@ -1,0 +1,26 @@
+{
+  "schema_id": "sequesign.task_accepted.v0.1",
+  "type": "object",
+  "required": ["marketplace", "task_id", "buyer_id", "agent_id", "task_title", "accepted_at"],
+  "properties": {
+    "marketplace": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "buyer_id": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "task_title": {
+      "type": "string"
+    },
+    "accepted_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,25 @@
+{
+  "schema_id": "sequesign.payment_instruction_created.v0.1",
+  "type": "object",
+  "required": ["payment_instruction_id", "amount_usd", "recipient", "status"],
+  "properties": {
+    "payment_instruction_id": {
+      "type": "string"
+    },
+    "amount_usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "recipient": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["simulated", "created", "submitted", "failed"]
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,14 @@
+{
+  "schema_id": "sequesign.human_approval_received.v0.1",
+  "type": "object",
+  "required": ["approval_context", "approval_attestation"],
+  "properties": {
+    "approval_context": {
+      "type": "object"
+    },
+    "approval_attestation": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}
