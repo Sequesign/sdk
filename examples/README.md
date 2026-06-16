@@ -80,7 +80,10 @@ Stored at:      https://library.sequesign.com/v1/receipts/rec_…
 level=L2_IDENTITY_BOUND  witnessed=true  agent_identity=registered
 ```
 
-Reaches `L2_IDENTITY_BOUND` — witnessed AND bound to your registered keypair.
+Reaches `L2_IDENTITY_BOUND` with `agent_identity=registered`: the agent
+signature binds every action to your key (that is what the L2 level reflects),
+and the broker's `agent_identity_attestation` vouches that the key is your
+registered identity. Witnessing is orthogonal to the level.
 
 ## 04 — Record an action, direct mode (SDK)
 
@@ -96,13 +99,18 @@ npx tsx examples/04-record-direct.ts
 ```text
 Recording one action; signing locally and witnessing via https://witness.sequesign.com/witness...
 Receipt assembled locally: rec_…
-level=L1_WITNESSED  witnessed=true  agent_identity=unregistered
+level=L2_IDENTITY_BOUND  witnessed=true  agent_identity=unregistered
 ```
 
-Direct mode tops out at `L1_WITNESSED`: the `agent_identity_attestation` is
-stamped by the **broker** under a registered API key, so a direct receipt is
-structurally `unregistered` even when you sign with your registered key. Use
-managed mode (example 02) for `L2_IDENTITY_BOUND`.
+Direct mode also reaches `L2_IDENTITY_BOUND` — the level reflects that every
+action carries a valid agent signature bound to the receipt's key, which holds
+without a broker. What direct mode lacks is the broker-stamped
+`agent_identity_attestation`, so `agent_identity` is `unregistered` (vs
+`registered` in managed mode). The distinguishing signal between 02 and 04 is
+**`agent_identity`, not the level**: a relying party that needs
+platform-vouched identity should check `agent_identity.kind === "registered"`,
+not the level name. (`agent_id` and `agent_public_key` are self-asserted in
+direct mode.)
 
 ## curl-managed — managed mode without the SDK
 
