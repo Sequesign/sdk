@@ -54,13 +54,19 @@ npx tsx examples/01-verify-offline.ts ./out/example-02.sequesign
 Verifying receipt package: ./out/example-02.sequesign
 
 Sequesign verification PASSED
-Level: L2_IDENTITY_BOUND
+Level: L2_KEY_BOUND
+Identity: registered (vouched)
 Chain: chn_…
 Actions: 1
 Witness: verified
 
-valid=true  level=L2_IDENTITY_BOUND  witnessed=true  agent_identity=registered
+valid=true  level=L2_KEY_BOUND  witnessed=true  agent_identity=registered
 ```
+
+`Level` reflects cryptographic key-binding (`L2_KEY_BOUND`); `Identity`
+reflects whether that key is a vouched identity — `registered (vouched)` vs
+`self-asserted (unregistered)`. They are independent: direct-mode receipts are
+also `L2_KEY_BOUND`, but `self-asserted`.
 
 ## 02 — Record an action, managed mode (SDK)
 
@@ -77,10 +83,10 @@ npx tsx examples/02-record-managed.ts
 Recording one action against https://broker.sequesign.com; the witness will co-sign it...
 Receipt sealed: rec_…
 Stored at:      https://library.sequesign.com/v1/receipts/rec_…
-level=L2_IDENTITY_BOUND  witnessed=true  agent_identity=registered
+level=L2_KEY_BOUND  witnessed=true  agent_identity=registered
 ```
 
-Reaches `L2_IDENTITY_BOUND` with `agent_identity=registered`: the agent
+Reaches `L2_KEY_BOUND` with `agent_identity=registered`: the agent
 signature binds every action to your key (that is what the L2 level reflects),
 and the broker's `agent_identity_attestation` vouches that the key is your
 registered identity. Witnessing is orthogonal to the level.
@@ -99,10 +105,10 @@ npx tsx examples/04-record-direct.ts
 ```text
 Recording one action; signing locally and witnessing via https://witness.sequesign.com/witness...
 Receipt assembled locally: rec_…
-level=L2_IDENTITY_BOUND  witnessed=true  agent_identity=unregistered
+level=L2_KEY_BOUND  witnessed=true  agent_identity=unregistered
 ```
 
-Direct mode also reaches `L2_IDENTITY_BOUND` — the level reflects that every
+Direct mode also reaches `L2_KEY_BOUND` — the level reflects that every
 action carries a valid agent signature bound to the receipt's key, which holds
 without a broker. What direct mode lacks is the broker-stamped
 `agent_identity_attestation`, so `agent_identity` is `unregistered` (vs

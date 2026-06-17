@@ -119,10 +119,16 @@ export function decodeIdentityProofRef(ref: string): SignedRegistrationRecord | 
     "issuer",
     "role",
     "subject_key_fingerprint",
-    "identity",
     "registered_at"
   ] as const;
   if (!stringFields.every((f) => typeof r[f] === "string")) return null;
+  // identity is required for approver/counterparty (the named identity the key
+  // is registered to) but OMITTED for the agent role (key-only registration).
+  if (r.role === "agent") {
+    if (r.identity !== undefined && typeof r.identity !== "string") return null;
+  } else if (typeof r.identity !== "string") {
+    return null;
+  }
   if (r.party_type !== undefined && typeof r.party_type !== "string") return null;
   return parsed as SignedRegistrationRecord;
 }
@@ -185,4 +191,32 @@ export function identityProofVouches(
     return false;
   }
   return r.subject_key_fingerprint === subjectFingerprint;
+}
+
+// Whether a `sequesign` identity proof vouches a REGISTERED AGENT KEY: the
+// platform seal verifies AND the record is an agent-role record binding the
+// SAME key fingerprint. Key-only — agent registration vouches a key, not a name,
+// so there is no identity / party_type to match. `keyFingerprint` is the
+// fingerprint the verifier already computed from the receipt's agent_public_key
+// (passed in so this resolver never recomputes it with a different function).
+// Resolve a `sequesign` agent identity proof to its VOUCHED registration record,
+// or null if it does not vouch the given key. Returns the record (not a boolean)
+// so the caller reads vouched fields — e.g. registered_at — from inside the
+// signed seal rather than from the unsigned attestation. Key-only: agent
+// registration vouches a key, not a name. `keyFingerprint` is the fingerprint
+// the verifier already computed from the receipt's agent_public_key.
+export function agentIdentityProofRecord(
+  ref: string,
+  expected: { keyFingerprint: string },
+  trustedPlatformFingerprints: Set<string>
+): RegistrationRecord | null {
+  const signed = decodeIdentityProofRef(ref);
+  if (!signed) return null;
+  if (!registrationRecordSealVerifies(signed, trustedPlatformFingerprints)) return null;
+  const r = signed.record;
+  if (r.issuer !== "sequesign") return null;
+  if (r.schema_version !== "sequesign.registration_record.v1.0.0") return null;
+  if (r.role !== "agent") return null;
+  if (r.subject_key_fingerprint !== expected.keyFingerprint) return null;
+  return r;
 }

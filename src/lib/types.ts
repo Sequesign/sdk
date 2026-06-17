@@ -204,9 +204,7 @@ export type AttestationSatellite = ApprovalSatellite | CounterpartySatellite;
 // A third value (e.g. "transient") is reserved for any future tier
 // where Sequesign sees the content but does not durably store it;
 // not shipped in v0.4.
-export type EvidenceCustodyValue =
-  | "sequesign_hosted"
-  | "external_client_managed";
+export type EvidenceCustodyValue = "sequesign_hosted" | "external_client_managed";
 
 export type EvidenceReference = {
   action_id: string;
@@ -256,6 +254,15 @@ export type ReceiptSchemaVersion = "sequesign.receipt.v2.0.0";
 export type AgentIdentityAttestation = {
   registered_at: string;
   key_fingerprint: string;
+  // The platform's signed statement that key_fingerprint is a registered agent
+  // key (issuer "sequesign", role "agent"), so the OFFLINE verifier can confirm
+  // "registered" without trusting the receipt's source. Travels as
+  // identity_proof.ref (base64url of a SignedRegistrationRecord) — the same
+  // primitive approver/counterparty identity uses. Optional for backward
+  // compatibility: a legacy attestation with no identity_proof (or one that does
+  // not verify against the trusted registration keys) is reported as
+  // self_asserted, never registered.
+  identity_proof?: IdentityProof;
 };
 export type AgentActionReceipt = {
   schema_version: ReceiptSchemaVersion;
@@ -308,7 +315,7 @@ export type VerificationLevel =
   | "NONE"
   | "L0_INTEGRITY_ONLY"
   | "L1_WITNESSED"
-  | "L2_IDENTITY_BOUND"
+  | "L2_KEY_BOUND"
   | "L3_POLICY_BOUND";
 
 // Independent attestation-badge state. `absent`: no such attestation.
@@ -378,15 +385,19 @@ export type IdentityProof = {
 export type RegistrationRecord = {
   schema_version: "sequesign.registration_record.v1.0.0";
   issuer: "sequesign";
-  role: "approver" | "counterparty";
+  role: "approver" | "counterparty" | "agent";
   // Present for the approver role (matches the approval's party_type); omitted
-  // for counterparty.
+  // for counterparty and agent.
   party_type?: "human" | "agent";
   // sha256: fingerprint of the enrolled attestation key (the approver_public_key
-  // / counterparty_public_key that signs the A/C). Binds the record to a key.
+  // / counterparty_public_key that signs the A/C, or the agent_public_key that
+  // signs the receipt). Binds the record to a key.
   subject_key_fingerprint: string;
-  // The named identity the key is registered to: the approver_id / counterparty_id.
-  identity: string;
+  // The named identity the key is registered to: the approver_id /
+  // counterparty_id. OMITTED for the agent role — agent registration binds a
+  // KEY, not a name (the agent_id in a receipt is a self-asserted label), so
+  // the record vouches "this key is a registered agent key" with no name.
+  identity?: string;
   registered_at: string;
 };
 
@@ -407,11 +418,7 @@ export type SignedRegistrationRecord = {
 // - partial: some attestations have valid proofs, others have none.
 // - not_present: no attestation carries a proof (Phase 1.5 receipt or
 //   a Phase 2 receipt where finalize() skipped proof fetch).
-export type InclusionProofsVerifiedState =
-  | "passed"
-  | "failed"
-  | "partial"
-  | "not_present";
+export type InclusionProofsVerifiedState = "passed" | "failed" | "partial" | "not_present";
 
 // Provenance of the inclusion proofs the verifier consumed. Proofs are
 // uniquely identified by (log_id, position, entry_hash) and never
@@ -464,6 +471,15 @@ export type VerificationReport = {
   agent_identity?:
     | { kind: "registered"; key_fingerprint: string; registered_at: string }
     | { kind: "unregistered" };
+  // Identity assurance, derived from agent_identity for machine consumers that
+  // gate on it directly. "registered": a broker-vouched
+  // agent_identity_attestation is present and matches the embedded key.
+  // "self_asserted": none (direct mode, or unregistered managed). This is the
+  // separate "is the signing key a vouched identity" signal —
+  // verification_level (L2_KEY_BOUND) reflects key-binding only, not who the
+  // key belongs to. Optional because early failure paths return before it is
+  // computed.
+  identity_assurance?: "registered" | "self_asserted";
   action?: { sequence: number; action_type: string };
   expected_evidence_hash?: string;
   computed_evidence_hash?: string;

@@ -117,7 +117,11 @@ export function registrationRecordMessage(p: {
   role: string;
   partyType?: string;
   subjectKeyFingerprint: string;
-  identity: string;
+  // Omitted for the agent role (key-only registration, no named identity);
+  // always present for approver/counterparty. Encoded as "" when absent, which
+  // leaves approver/counterparty bytes unchanged (they always pass a real
+  // identity) and never collides across roles (role is its own field).
+  identity?: string;
   registeredAt: string;
 }): Buffer {
   return lengthPrefixedUtf8([
@@ -127,7 +131,7 @@ export function registrationRecordMessage(p: {
     p.role,
     p.partyType ?? "",
     p.subjectKeyFingerprint,
-    p.identity,
+    p.identity ?? "",
     p.registeredAt
   ]);
 }

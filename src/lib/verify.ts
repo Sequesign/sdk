@@ -30,12 +30,8 @@ import {
   satelliteWitnessMessage
 } from "./messages.js";
 import { isEd25519PublicKeyPem, keyIdFromPublicKeyPem, verifyEd25519 } from "./keys.js";
-import { identityProofVouches } from "./registration.js";
-import {
-  batchSigningMessage,
-  hexToBytes,
-  verifyAuditPath
-} from "./merkle.js";
+import { identityProofVouches, agentIdentityProofRecord } from "./registration.js";
+import { batchSigningMessage, hexToBytes, verifyAuditPath } from "./merkle.js";
 
 function baseFlags() {
   return {
@@ -132,7 +128,7 @@ export function parseTrustedWitnessKeys(raw: string | undefined | null): Witness
   const entries: unknown[] = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === "object" && Array.isArray((parsed as { keys?: unknown }).keys)
-      ? ((parsed as { keys: unknown[] }).keys)
+      ? (parsed as { keys: unknown[] }).keys
       : [];
   if (entries.length === 0) {
     throw new Error(
@@ -163,7 +159,7 @@ export function parseTrustedWitnessKeys(raw: string | undefined | null): Witness
   if (keys.length === 0) {
     throw new Error(
       fromDocument
-        ? "WITNESS_TRUSTED_KEYS is a discovery document with no witness keys (key_type \"witness\"). Provide at least one witness key."
+        ? 'WITNESS_TRUSTED_KEYS is a discovery document with no witness keys (key_type "witness"). Provide at least one witness key.'
         : "WITNESS_TRUSTED_KEYS contained no usable keys."
     );
   }
@@ -450,7 +446,7 @@ export async function verifyReceiptPackage(
       // binding checks here, a malicious package can carry an
       // attestation signed by an unrelated key over an unrelated action
       // hash (chain_state alone is consistent) and still reach
-      // L2_IDENTITY_BOUND and above, laundering the work under a
+      // L2_KEY_BOUND and above, laundering the work under a
       // more-trusted identity. Bind every identity- and action-level
       // field to the computed action and the receipt before trusting
       // the signature. (sequence is the lookup key above, so it is
@@ -1063,8 +1059,7 @@ export async function verifyReceiptPackage(
           if (att.log_entry) receiptPositions.add(att.log_entry.position);
         }
         const omitted = queryResult.entry_positions.filter((p) => !receiptPositions.has(p));
-        completenessVerified =
-          queryResult.entry_count === actions.length && omitted.length === 0;
+        completenessVerified = queryResult.entry_count === actions.length && omitted.length === 0;
         completenessReport = {
           log_id: logId,
           chain_id: receipt.chain.chain_id,
@@ -1099,11 +1094,7 @@ export async function verifyReceiptPackage(
   // hard verification failure; absence from every source is permitted
   // and produces "not_present" or "partial". See PLAN.md section
   // 4.23.
-  const inclusionResult = await verifyInclusionProofs(
-    receipt,
-    packageDir,
-    options.inclusionProofs
-  );
+  const inclusionResult = await verifyInclusionProofs(receipt, packageDir, options.inclusionProofs);
   if (inclusionResult.state === "failed") {
     return fail({
       receipt_mode: receipt.receipt_mode,
@@ -1159,11 +1150,30 @@ export async function verifyReceiptPackage(
             : `agent_identity_attestation_fingerprint_mismatch: the attestation key_fingerprint (${attestation.key_fingerprint}) does not match the SHA-256 of the embedded agent_public_key (${expectedFingerprint}).`
       });
     }
-    agentIdentity = {
-      kind: "registered",
-      key_fingerprint: attestation.key_fingerprint,
-      registered_at: attestation.registered_at
-    };
+    // "registered" requires a platform signature that verifies against the
+    // trusted registration keys — the SAME discipline as approver/counterparty
+    // identity_proof. A bare {registered_at, key_fingerprint} (legacy, or a
+    // forged one a self-assembler dropped in) is NOT trusted: the fingerprint
+    // only proves the attestation points at the receipt's own key, not that any
+    // platform vouched it. Unverifiable => self_asserted, never registered.
+    const vouchedRecord =
+      attestation.identity_proof && attestation.identity_proof.issuer === "sequesign"
+        ? agentIdentityProofRecord(
+            attestation.identity_proof.ref,
+            { keyFingerprint: expectedFingerprint },
+            trustedRegistrationFingerprints
+          )
+        : null;
+    agentIdentity = vouchedRecord
+      ? {
+          kind: "registered",
+          key_fingerprint: attestation.key_fingerprint,
+          // registered_at comes from INSIDE the signed record, not the unsigned
+          // attestation field, so the reported registration time is vouched and
+          // cannot be edited without breaking the platform signature.
+          registered_at: vouchedRecord.registered_at
+        }
+      : { kind: "unregistered" };
   }
 
   // v0.6 arc: identity-anchored base only — `L0` → `L2` (identity) →
@@ -1173,7 +1183,7 @@ export async function verifyReceiptPackage(
   // `witnessed` stays orthogonal: `L2`+ does not require it.
   let verification_level: VerificationReport["verification_level"] = "L0_INTEGRITY_ONLY";
   if (witnessed) verification_level = "L1_WITNESSED";
-  if (agentIdentityBound) verification_level = "L2_IDENTITY_BOUND";
+  if (agentIdentityBound) verification_level = "L2_KEY_BOUND";
   // policyBound is boolean | null here (false hard-failed above). true
   // reaches L3; null (not requested) stays at L2.
   if (agentIdentityBound && policyBound) verification_level = "L3_POLICY_BOUND";
@@ -1198,6 +1208,7 @@ export async function verifyReceiptPackage(
     trust_anchor_mode: trustAnchorMode,
     witness_trust_anchor: witnessTrustAnchor,
     agent_identity: agentIdentity,
+    identity_assurance: agentIdentity.kind === "registered" ? "registered" : "self_asserted",
     profile: profileReport,
     flags: {
       hash_integrity: true,
@@ -1464,10 +1475,7 @@ function findSidecarProof(
   ref: { log_id: string; position: number; entry_hash: string }
 ): BatchInclusionProof | undefined {
   return sidecarProofs.find(
-    (p) =>
-      p.log_id === ref.log_id &&
-      p.position === ref.position &&
-      p.entry_hash === ref.entry_hash
+    (p) => p.log_id === ref.log_id && p.position === ref.position && p.entry_hash === ref.entry_hash
   );
 }
 
@@ -1667,6 +1675,14 @@ export function printVerificationReport(report: VerificationReport): void {
   if (report.valid) {
     console.log("Sequesign verification PASSED");
     console.log(`Level: ${report.verification_level}`);
+    if (report.identity_assurance)
+      console.log(
+        `Identity: ${
+          report.identity_assurance === "registered"
+            ? "registered (vouched)"
+            : "self-asserted (unregistered)"
+        }`
+      );
     if (report.receipt_mode) console.log(`Mode: ${report.receipt_mode}`);
     if (report.profile) console.log(`Profile: ${report.profile.profile_id}`);
     console.log(`Schema validation: ${flagText(report.flags.schema_valid)}`);
@@ -1677,8 +1693,7 @@ export function printVerificationReport(report: VerificationReport): void {
       console.log(`Final state: ${report.chain.final_chain_state.slice(0, 12)}...`);
     }
     if (report.flags.witnessed) console.log("Witness: verified");
-    if (report.flags.approval !== "absent")
-      console.log(`Approval: ${report.flags.approval}`);
+    if (report.flags.approval !== "absent") console.log(`Approval: ${report.flags.approval}`);
     if (report.flags.counterparty !== "absent")
       console.log(`Counterparty: ${report.flags.counterparty}`);
     if (report.flags.inclusion_proofs_verified !== null) {

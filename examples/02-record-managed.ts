@@ -10,8 +10,9 @@
  * What you'll see:
  *   - one action recorded under your registered agent, witnessed by the broker,
  *     and finalized into a receipt package on disk;
- *   - the same package verified locally, printing verification level
- *     L2_IDENTITY_BOUND (witnessed AND bound to your registered identity).
+ *   - the same package verified locally, printing L2_KEY_BOUND with
+ *     Identity: registered — the agent signature binds every action to your
+ *     key, and the broker vouches that key as your registered identity.
  *
  * Prerequisites (the real, everyday setup — no keys are generated here):
  *   SEQUESIGN_API_KEY            a write-class API key (dashboard.sequesign.com)
@@ -29,10 +30,13 @@ import type { KeyMaterial } from "@sequesign/sdk";
 import {
   verifyReceiptPackage,
   selfTrustedWitnessKeysFromPackage,
+  parseTrustedRegistrationKeys,
   printVerificationReport
 } from "@sequesign/sdk/verify";
 
 const BROKER_URL = process.env.SEQUESIGN_BROKER_URL ?? "https://broker.sequesign.com";
+const DASHBOARD_API_URL =
+  process.env.SEQUESIGN_DASHBOARD_API_URL ?? "https://dashboard-api.sequesign.com";
 const PACKAGE_DIR = path.resolve("out", "example-02.sequesign");
 
 // Load your registered agent key. This is the key your API key is registered
@@ -108,11 +112,18 @@ async function main(): Promise<void> {
   await writeFile(result.envelopePath, JSON.stringify(await stored.json(), null, 2));
 
   // Verify the broker-stored receipt offline against the witness key embedded
-  // in the package.
+  // in the package. The agent_identity_attestation now carries a platform-
+  // signed identity_proof; to confirm the agent identity as `registered`
+  // (rather than self_asserted), anchor it to the published platform
+  // registration key. Same pattern as scripts/smoke-vouching.ts.
   const trustedWitnessKeys = await selfTrustedWitnessKeysFromPackage(PACKAGE_DIR);
+  const trustedRegistrationKeys = parseTrustedRegistrationKeys(
+    await (await fetch(`${DASHBOARD_API_URL}/.well-known/sequesign/registration-keys.json`)).text()
+  );
   const report = await verifyReceiptPackage(PACKAGE_DIR, {
     trustedWitnessKeys,
-    trustAnchorMode: "self"
+    trustAnchorMode: "self",
+    trustedRegistrationKeys
   });
 
   console.log("");
@@ -122,14 +133,14 @@ async function main(): Promise<void> {
       `agent_identity=${report.agent_identity?.kind}`
   );
 
-  // This example advertises L2_IDENTITY_BOUND. The broker still accepts a
-  // write-class key that is NOT registered to this agent PEM — it just omits
-  // the agent_identity_attestation, yielding a valid but lower-level receipt.
-  // Fail loudly in that case so the example never claims success without
-  // actually demonstrating the registered-identity binding.
+  // This example demonstrates a REGISTERED identity (Identity: registered).
+  // The broker still accepts a write-class key that is NOT registered to this
+  // agent PEM — it just omits the agent_identity_attestation, so the receipt
+  // verifies but as self-asserted. Fail loudly in that case so the example
+  // never claims success without actually demonstrating the registered binding.
   if (!report.valid || report.agent_identity?.kind !== "registered") {
     console.error(
-      `\nExpected an identity-bound receipt (L2), got level=${report.verification_level}, ` +
+      `\nExpected a registered-identity receipt, got identity_assurance=${report.identity_assurance}, ` +
         `agent_identity=${report.agent_identity?.kind}. Use a write-class API key that is ` +
         "REGISTERED to the public key of SEQUESIGN_AGENT_PRIVATE_KEY (dashboard.sequesign.com → API Keys)."
     );
