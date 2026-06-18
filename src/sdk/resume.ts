@@ -152,7 +152,10 @@ export function buildSessionCheckpoint(args: BuildSessionCheckpointArgs): Sessio
       sequenceNext: snapshot.sequenceNext
     },
     packageDirectory: writer.directory,
-    witness: witnessSummary
+    witness: witnessSummary,
+    // Persist the witness-vouched registered identity so a resume + finalize
+    // (with no further action) still stamps agent_identity_attestation.
+    ...(state.agentIdentity() ? { agentIdentity: state.agentIdentity() } : {})
   };
 }
 
@@ -226,6 +229,11 @@ export async function resumeSessionImpl(args: ResumeSessionImplArgs): Promise<Se
     sequenceStart: checkpoint.chain.sequenceStart,
     schemaReferences: checkpoint.schemaReferences
   });
+  // Restore the witness-vouched registered identity so finalize stamps it even
+  // if the resumed session records no further action.
+  if (checkpoint.agentIdentity) {
+    state.setAgentIdentity(checkpoint.agentIdentity);
+  }
 
   let currentChainState = checkpoint.chain.initialChainState;
   for (let i = 0; i < actionsOnDisk.length; i++) {

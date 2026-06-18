@@ -18,6 +18,7 @@ import type {
   VerificationReport,
   WitnessAttestation
 } from "../lib/types.js";
+import type { WitnessAgentIdentity } from "../lib/witness-types.js";
 
 export type {
   ActionRecord,
@@ -320,9 +321,29 @@ export interface RecordPlanStepInput {
   actionId?: string;
 }
 
-export interface RecordCounterpartyAttestationInput {
-  attestation: CounterpartyAttestation;
-}
+// recordCounterpartyAttestation accepts either a fully-formed, externally
+// signed attestation (attach_signed — the counterparty signed out of band)
+// or, mirroring recordApproval, a sign_locally request where the SDK builds
+// and signs the attestation from the counterparty's keypair. sign_locally
+// derives attested_content_hash from the attested action's evidence and binds
+// chain_id to the session, so the caller cannot point a confirmation at
+// content the counterparty never saw. `mode` may be omitted on the
+// attach_signed shape for backward compatibility with callers that predate
+// the discriminant.
+export type RecordCounterpartyAttestationInput =
+  | {
+      mode: "sign_locally";
+      counterpartyId: string;
+      counterpartyKeypair: KeyMaterial;
+      attestedActionId: string;
+      attestationPurpose: string;
+      attestedAt?: string;
+      identityProof?: IdentityProof;
+    }
+  | {
+      mode?: "attach_signed";
+      attestation: CounterpartyAttestation;
+    };
 
 // v0.6 step #3b.3: submit a deferred-attestation satellite against an
 // already-sealed receipt R (the `receipt` + `packageDirectory` come from a
@@ -335,11 +356,29 @@ export type SubmitApprovalSatelliteInput = {
   receipt: AgentActionReceipt;
 } & RecordApprovalInput;
 
-export interface SubmitCounterpartySatelliteInput {
+// Mirrors SubmitApprovalSatelliteInput: a counterparty confirmation can be
+// built+signed locally from the counterparty's keypair (sign_locally — the SDK
+// derives attested_content_hash from the sealed receipt's evidence for
+// attestedActionId and binds chain_id to the receipt) or attached pre-signed
+// (attach_signed; mode optional for back-compat).
+export type SubmitCounterpartySatelliteInput = {
   packageDirectory: string;
   receipt: AgentActionReceipt;
-  attestation: CounterpartyAttestation;
-}
+} & (
+  | {
+      mode: "sign_locally";
+      counterpartyId: string;
+      counterpartyKeypair: KeyMaterial;
+      attestedActionId: string;
+      attestationPurpose: string;
+      attestedAt?: string;
+      identityProof?: IdentityProof;
+    }
+  | {
+      mode?: "attach_signed";
+      attestation: CounterpartyAttestation;
+    }
+);
 
 export const PLAN_GENERATED_ACTION_TYPE = "plan_generated";
 export const PLAN_STEP_EXECUTED_ACTION_TYPE = "plan_step_executed";
@@ -375,6 +414,11 @@ export interface SessionCheckpoint {
   };
   packageDirectory: string;
   witness: WitnessConfigSummary;
+  // Direct-mode registered identity vouched by the witness (when the session's
+  // agent key is the one registered to the API key). Persisted so a resume +
+  // finalize without a further action still stamps agent_identity_attestation;
+  // absent for self_asserted sessions.
+  agentIdentity?: WitnessAgentIdentity;
 }
 
 export interface ResumeOptions {

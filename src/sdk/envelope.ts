@@ -11,6 +11,7 @@ import {
   assembleAgentActionReceipt,
   type AssembledAction
 } from "../lib/envelope.js";
+import { agentIdentityAttestationFor } from "../lib/agent-identity.js";
 import type { AgentActionReceipt } from "../lib/types.js";
 import type { SessionState } from "./state.js";
 
@@ -31,6 +32,17 @@ export function buildReceiptEnvelope(args: BuildEnvelopeArgs): AgentActionReceip
     witnessAttestation: witnessAttestations[i],
     evidenceReference: evidenceReferences[i]
   }));
+  // Direct mode: when the witness vouched the session's agent key as the one
+  // registered to the API key, stamp a registered agent_identity_attestation
+  // (managed mode does the equivalent broker-side). Undefined → self_asserted.
+  const witnessedIdentity = state.agentIdentity();
+  const agentIdentityAttestation = witnessedIdentity
+    ? agentIdentityAttestationFor({
+        agentPublicKey: witnessedIdentity.agent_public_key,
+        agentKeyRegisteredAt: witnessedIdentity.agent_key_registered_at,
+        agentIdentityProofRef: witnessedIdentity.agent_identity_proof_ref
+      })
+    : undefined;
   return assembleAgentActionReceipt({
     receiptId: state.receiptId,
     receiptMode: state.mode,
@@ -54,6 +66,7 @@ export function buildReceiptEnvelope(args: BuildEnvelopeArgs): AgentActionReceip
     approvalAttestations: state.approvals(),
     counterpartyAttestations: state.counterpartyAttestations(),
     profile: state.profile,
-    schemaReferences: state.schemaReferences()
+    schemaReferences: state.schemaReferences(),
+    agentIdentityAttestation
   });
 }

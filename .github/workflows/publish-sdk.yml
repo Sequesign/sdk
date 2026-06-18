@@ -1,0 +1,50 @@
+# Publish @sequesign/sdk to npm (with provenance) via GitHub OIDC.
+#
+# THIS WORKFLOW IS FOR THE STANDALONE `Sequesign/sdk` REPOSITORY, where this
+# package sits at the repo root (it is mirrored there from the Sequesign
+# monorepo's packages/sequesign-sdk via `npm run sync:sdk`). The monorepo is the
+# source of truth; this repo runs the release.
+#
+# @sequesign/sdk is the protocol's reference implementation: zero runtime deps
+# (Node builtins only), TypeScript built with `npm run build` (tsc), and it
+# bundles @sequesign/lib into its own dist. The published package is what
+# @sequesign/mcp depends on, so this MUST publish before an MCP release.
+#
+# Prerequisites (see ../README.md / the monorepo's PUBLISHING notes):
+#   - the `@sequesign` npm scope + an `NPM_TOKEN` repo secret (or npm Trusted
+#     Publishing configured for this repo/workflow, which drops the token);
+#   - a committed package-lock.json (devDeps only) so `npm ci` is reproducible.
+
+name: Publish SDK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write # OIDC: npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm >= 11.5.1 for provenance / trusted publishing.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Publish to npm (with provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public

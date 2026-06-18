@@ -3,17 +3,19 @@ import { hashCanonical } from "../lib/hash.js";
 import { signEd25519, verifyEd25519 } from "../lib/keys.js";
 import {
   agentAttestationMessage,
-  approvalMessage
+  approvalMessage,
+  counterpartyAttestationMessage
 } from "../lib/messages.js";
 import type {
   ActionRecord,
   AgentAttestation,
   ApprovalAttestation,
+  CounterpartyAttestation,
   EvidenceBlob,
   IdentityProof,
   VerifiabilityClass
 } from "../lib/types.js";
-import { ApprovalError } from "./errors.js";
+import { ApprovalError, CounterpartyAttestationError } from "./errors.js";
 import { nowIso } from "./identifiers.js";
 import type { KeyMaterial } from "./types.js";
 
@@ -144,6 +146,62 @@ export function buildApprovalAttestation(
     approved_action_type: args.approvedActionType,
     approval_context_hash: approvalContextHash,
     approved_at: args.approvedAt,
+    signature_alg: "Ed25519",
+    signature,
+    ...(args.identityProof ? { identity_proof: args.identityProof } : {})
+  };
+}
+
+// v0.6 step #4.4 / MCP: shared counterparty-attestation builder, the
+// sign_locally counterpart to buildApprovalAttestation. Lets an SDK
+// consumer hand over the counterparty's keypair and have the SDK produce a
+// byte-correct, signature-verified CounterpartyAttestation, rather than
+// reimplementing counterpartyAttestationMessage's domain encoding off the
+// public surface. The caller never supplies attested_content_hash: the
+// session derives it from the attested action's evidence_hash, so a
+// sign_locally attestation cannot commit to content the counterparty never
+// saw. Verifies its own signature defensively (mirrors the approval builder).
+export interface BuildCounterpartyArgs {
+  counterpartyId: string;
+  counterpartyKeypair: KeyMaterial;
+  chainId: string;
+  attestedActionId: string;
+  attestedContentHash: string;
+  attestationPurpose: string;
+  attestedAt: string;
+  // NOT part of the signed message (see counterpartyAttestationMessage), so
+  // attaching it never changes the signature — it is metadata the verifier
+  // resolves to flip the counterparty leg to present_verified (vouched).
+  identityProof?: IdentityProof;
+}
+
+export function buildCounterpartyAttestation(
+  args: BuildCounterpartyArgs
+): CounterpartyAttestation {
+  const message = counterpartyAttestationMessage({
+    counterpartyId: args.counterpartyId,
+    chainId: args.chainId,
+    attestedActionId: args.attestedActionId,
+    attestedContentHash: args.attestedContentHash,
+    attestationPurpose: args.attestationPurpose,
+    attestedAt: args.attestedAt
+  });
+  const signature = signEd25519(args.counterpartyKeypair.privateKeyPem, message);
+  if (!verifyEd25519(args.counterpartyKeypair.publicKeyPem, message, signature)) {
+    throw new CounterpartyAttestationError(
+      "counterparty_signature_invalid",
+      `Signature produced by sign_locally did not verify against the supplied counterparty public key (counterparty_id=${args.counterpartyId}).`
+    );
+  }
+  return {
+    schema_version: "sequesign.counterparty_attestation.v0.1",
+    counterparty_id: args.counterpartyId,
+    counterparty_public_key: args.counterpartyKeypair.publicKeyPem,
+    chain_id: args.chainId,
+    attested_action_id: args.attestedActionId,
+    attested_content_hash: args.attestedContentHash,
+    attestation_purpose: args.attestationPurpose,
+    attested_at: args.attestedAt,
     signature_alg: "Ed25519",
     signature,
     ...(args.identityProof ? { identity_proof: args.identityProof } : {})

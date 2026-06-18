@@ -10,6 +10,7 @@ import type {
   SchemaReference,
   WitnessAttestation
 } from "../lib/types.js";
+import type { WitnessAgentIdentity } from "../lib/witness-types.js";
 import type { RetentionInput, SessionStateSnapshot } from "./types.js";
 
 export interface SessionStateInit {
@@ -59,6 +60,7 @@ export class SessionState {
   private _evidenceReferences: EvidenceReference[] = [];
   private _schemaReferences: SchemaReference[] = [];
   private _schemaReferenceIds = new Set<string>();
+  private _agentIdentity?: WitnessAgentIdentity;
   private _finalized = false;
 
   constructor(init: SessionStateInit) {
@@ -108,6 +110,18 @@ export class SessionState {
 
   schemaReferences(): SchemaReference[] {
     return this._schemaReferences.slice();
+  }
+
+  // Direct-mode agent identity returned by the witness when the session's
+  // agent key is the one registered to the API key. Set (idempotently) from
+  // each witnessed action; read at finalize to stamp agent_identity_attestation
+  // so the receipt verifies as a registered identity. Undefined → self_asserted.
+  setAgentIdentity(identity: WitnessAgentIdentity): void {
+    this._agentIdentity = identity;
+  }
+
+  agentIdentity(): WitnessAgentIdentity | undefined {
+    return this._agentIdentity;
   }
 
   get sequenceNext(): number {

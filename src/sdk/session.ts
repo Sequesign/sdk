@@ -47,6 +47,7 @@ import {
   buildActionRecord,
   buildEvidenceBlob,
   buildApprovalAttestation,
+  buildCounterpartyAttestation,
   extendChainWithAction
 } from "./recorder.js";
 import { SessionState } from "./state.js";
@@ -291,9 +292,18 @@ export class SessionImpl implements Session {
       action_record_hash: actionRecordHash,
       previous_chain_state: this._state.currentChainState,
       chain_state: nextChainState,
-      receipt_schema_version: "sequesign.receipt.v2.0.0"
+      receipt_schema_version: "sequesign.receipt.v2.0.0",
+      // Opt into direct-mode agent-identity binding: tell the witness which key
+      // we're signing with. If this key is the one registered to the API key,
+      // the witness enforces the match and returns the account's agent_identity
+      // (below) so the receipt verifies as a registered identity; if no key is
+      // registered, the witness ignores it and the identity stays self_asserted.
+      agent_public_key: this._state.agentPublicKeyPem
     };
-    const witnessAttestation = await this.witness.signCommitment(witnessRequest);
+    const { attestation: witnessAttestation, agentIdentity } =
+      await this.witness.signCommitment(witnessRequest);
+    // Capture the registered-identity credential (same value on every action).
+    if (agentIdentity) this._state.setAgentIdentity(agentIdentity);
 
     const filename = evidenceFilename(sequence, actionType);
     const evidencePath = `evidence/${filename}`;
@@ -515,7 +525,37 @@ export class SessionImpl implements Session {
     if (this._state.finalized) {
       throw new SessionStateError("Session is already finalized.");
     }
-    const attestation = input.attestation;
+    // sign_locally mirrors recordApproval: the SDK builds + signs the
+    // attestation from the counterparty's keypair and derives
+    // attested_content_hash from the attested action's evidence, so the
+    // caller cannot bind a confirmation to content the counterparty never
+    // saw. attach_signed (mode omitted for back-compat) takes a fully-formed
+    // attestation; its signature is validated at finalize/verify, not here
+    // (a deliberate v0.3 choice the test-suite pins).
+    let attestation: CounterpartyAttestation;
+    if (input.mode === "sign_locally") {
+      const targetForSigning = this._state
+        .actions()
+        .find((a) => a.action_id === input.attestedActionId);
+      if (!targetForSigning) {
+        throw new CounterpartyAttestationError(
+          "attested_action_id_not_found",
+          `Counterparty attestation references action ${input.attestedActionId}, which has not been recorded in this chain.`
+        );
+      }
+      attestation = buildCounterpartyAttestation({
+        counterpartyId: input.counterpartyId,
+        counterpartyKeypair: input.counterpartyKeypair,
+        chainId: this._state.chainId,
+        attestedActionId: input.attestedActionId,
+        attestedContentHash: targetForSigning.evidence_hash,
+        attestationPurpose: input.attestationPurpose,
+        attestedAt: input.attestedAt ?? nowIso(),
+        identityProof: input.identityProof
+      });
+    } else {
+      attestation = input.attestation;
+    }
     if (attestation.chain_id !== this._state.chainId) {
       throw new CounterpartyAttestationError(
         "chain_id_mismatch",

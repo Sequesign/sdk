@@ -1,7 +1,11 @@
 import { verifyEd25519 } from "../lib/keys.js";
 import { satelliteWitnessMessage, witnessAttestationMessage } from "../lib/messages.js";
 import type { BatchInclusionProof, SatelliteWitnessAttestation } from "../lib/types.js";
-import type { WitnessRequest, WitnessAttestation } from "../lib/witness-types.js";
+import type {
+  WitnessRequest,
+  WitnessAttestation,
+  WitnessAgentIdentity
+} from "../lib/witness-types.js";
 import {
   InclusionProofTimeoutError,
   WitnessKeyRotationLoopError,
@@ -88,11 +92,20 @@ export interface SatelliteSealRequest {
   satelliteContentHash: string;
 }
 
+// The result of a witnessed commitment. agentIdentity is present only when the
+// request carried agent_public_key and the witness confirmed it matches the key
+// registered to the API key — the SDK turns it into a registered
+// agent_identity_attestation. The attestation itself never carries it.
+export interface WitnessSignResult {
+  attestation: WitnessAttestation;
+  agentIdentity?: WitnessAgentIdentity;
+}
+
 export interface WitnessClient {
   readonly config: ResolvedWitnessConfig;
   readonly witnessId: string;
   readonly currentKey: WitnessIdentity;
-  signCommitment(request: WitnessRequest): Promise<WitnessAttestation>;
+  signCommitment(request: WitnessRequest): Promise<WitnessSignResult>;
   signSatellite(request: SatelliteSealRequest): Promise<SatelliteWitnessAttestation>;
   fetchInclusionProof(
     args: { position: number; logId: string },
@@ -122,12 +135,15 @@ export async function connectWitness(
     currentKey = { ...config.staticIdentity, witnessId };
   }
 
-  async function signCommitment(request: WitnessRequest): Promise<WitnessAttestation> {
+  async function signCommitment(request: WitnessRequest): Promise<WitnessSignResult> {
     let seenKeyIds = new Set<string>([currentKey.keyId]);
     let lastError: unknown;
     for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
       try {
-        const attestation = await doSingleAttempt(config, request);
+        const response = await doSingleAttempt(config, request);
+        // Keep the agent_identity (a session-level credential) out of the
+        // per-action witness attestation that lands in the receipt envelope.
+        const { agent_identity: agentIdentity, ...attestation } = response;
         validateResponseShape(request, attestation);
         if (witnessId && attestation.witness_id !== witnessId) {
           throw new WitnessResponseMismatchError(
@@ -152,7 +168,7 @@ export async function connectWitness(
             throw new WitnessSignatureMismatchError(currentKey.keyId);
           }
         }
-        return attestation;
+        return { attestation, agentIdentity };
       } catch (err) {
         lastError = err;
         if (!isRetriable(err) || attempt === config.maxAttempts) {
@@ -336,7 +352,7 @@ class NonRetriableHttpError extends Error {
 async function doSingleAttempt(
   config: ResolvedWitnessConfig,
   request: WitnessRequest
-): Promise<WitnessAttestation> {
+): Promise<WitnessAttestation & { key_id?: string; agent_identity?: WitnessAgentIdentity }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -355,7 +371,10 @@ async function doSingleAttempt(
   }
   clearTimeout(timeout);
   if (response.status === 200) {
-    return (await response.json()) as WitnessAttestation;
+    return (await response.json()) as WitnessAttestation & {
+      key_id?: string;
+      agent_identity?: WitnessAgentIdentity;
+    };
   }
   const body = await response.text().catch(() => "");
   if (response.status >= 500 || response.status === 408) {

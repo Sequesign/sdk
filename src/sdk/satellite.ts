@@ -41,7 +41,7 @@ import { ApprovalError, CounterpartyAttestationError, SatelliteError } from "./e
 import { generateApprovalId, nowIso } from "./identifiers.js";
 import { createIntermediaryClient } from "./intermediary-client.js";
 import { createPackageWriter } from "./package-writer.js";
-import { buildApprovalAttestation } from "./recorder.js";
+import { buildApprovalAttestation, buildCounterpartyAttestation } from "./recorder.js";
 import type { SubmitApprovalSatelliteInput, SubmitCounterpartySatelliteInput } from "./types.js";
 import { connectWitness, resolveWitnessConfig } from "./witness-client.js";
 
@@ -419,7 +419,36 @@ export async function submitCounterpartySatelliteImpl(
   resolved: ResolvedSdkConfig
 ): Promise<CounterpartySatellite> {
   const { receipt } = input;
-  const counterparty: CounterpartyAttestation = input.attestation;
+
+  // sign_locally mirrors submitApprovalSatellite: build + sign the inner
+  // attestation from the counterparty's keypair, deriving attested_content_hash
+  // from the sealed receipt's evidence for attestedActionId (so it cannot be
+  // bound to content the counterparty never saw) and chain_id from the receipt.
+  // attach_signed (mode omitted for back-compat) takes a pre-signed attestation.
+  let counterparty: CounterpartyAttestation;
+  if (input.mode === "sign_locally") {
+    const targetForSigning = receipt.evidence_references.find(
+      (e) => e.action_id === input.attestedActionId
+    );
+    if (!targetForSigning) {
+      throw new CounterpartyAttestationError(
+        "attested_action_id_not_found",
+        `Counterparty attestation references action ${input.attestedActionId}, which is not in the sealed receipt.`
+      );
+    }
+    counterparty = buildCounterpartyAttestation({
+      counterpartyId: input.counterpartyId,
+      counterpartyKeypair: input.counterpartyKeypair,
+      chainId: receipt.chain.chain_id,
+      attestedActionId: input.attestedActionId,
+      attestedContentHash: targetForSigning.evidence_hash,
+      attestationPurpose: input.attestationPurpose,
+      attestedAt: input.attestedAt ?? nowIso(),
+      identityProof: input.identityProof
+    });
+  } else {
+    counterparty = input.attestation;
+  }
 
   // The key must be a genuine Ed25519 public key. verifyEd25519 (below)
   // delegates to Node's generic EdDSA verifier, which also accepts other EdDSA

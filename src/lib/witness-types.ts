@@ -13,6 +13,24 @@ export type WitnessRequest = {
   previous_chain_state: string;
   chain_state: string;
   receipt_schema_version?: string;
+  // Direct-mode agent-identity binding (optional, backward compatible). When a
+  // direct-mode client sends the public key it is signing with, the witness —
+  // which authenticates the same API key — enforces that it matches the key
+  // registered to that API key (rejecting a mismatch like the broker does) and
+  // returns the account's agent_identity so the client can stamp a registered
+  // identity into the receipt. Omitted by older clients → unchanged behavior
+  // (no enforcement, self_asserted identity).
+  agent_public_key?: string;
+};
+
+// The agent-identity block the witness returns when the authenticated API key
+// is registered AND the request's agent_public_key matches the registered key.
+// The SDK turns this into the receipt's agent_identity_attestation (via
+// agentIdentityAttestationFor) so a direct-mode receipt verifies as registered.
+export type WitnessAgentIdentity = {
+  agent_public_key: string;
+  agent_key_registered_at: string;
+  agent_identity_proof_ref: string | null;
 };
 
 export type LogEntryRef = {

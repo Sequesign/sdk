@@ -87,6 +87,7 @@ import {
   buildActionRecord,
   buildEvidenceBlob,
   buildApprovalAttestation,
+  buildCounterpartyAttestation,
   extendChainWithAction
 } from "./recorder.js";
 import { applySchemaPolicy } from "./schema-policy.js";
@@ -499,12 +500,37 @@ class ManagedSession implements Session {
     input: RecordCounterpartyAttestationInput
   ): Promise<CounterpartyAttestation> {
     // §3.2 PR 3: mirrors src/sdk/session.ts recordCounterpartyAttestation.
-    // attach_signed only; direct mode does not expose a sign_locally
-    // variant for counterparties (v0.3 protocol). No witness call.
+    // No witness call. sign_locally builds + signs from the counterparty
+    // keypair and derives attested_content_hash from the attested action;
+    // attach_signed (mode omitted for back-compat) takes a formed attestation
+    // whose signature the broker / verifier validates at finalize.
     if (this._state.finalized) {
       throw new SessionStateError("Session is already finalized.");
     }
-    const attestation = input.attestation;
+    let attestation: CounterpartyAttestation;
+    if (input.mode === "sign_locally") {
+      const targetForSigning = this._state
+        .actions()
+        .find((a) => a.action_id === input.attestedActionId);
+      if (!targetForSigning) {
+        throw new CounterpartyAttestationError(
+          "attested_action_id_not_found",
+          `Counterparty attestation references action ${input.attestedActionId}, which has not been recorded in this chain.`
+        );
+      }
+      attestation = buildCounterpartyAttestation({
+        counterpartyId: input.counterpartyId,
+        counterpartyKeypair: input.counterpartyKeypair,
+        chainId: this._state.chainId,
+        attestedActionId: input.attestedActionId,
+        attestedContentHash: targetForSigning.evidence_hash,
+        attestationPurpose: input.attestationPurpose,
+        attestedAt: input.attestedAt ?? nowIso(),
+        identityProof: input.identityProof
+      });
+    } else {
+      attestation = input.attestation;
+    }
     if (attestation.chain_id !== this._state.chainId) {
       throw new CounterpartyAttestationError(
         "chain_id_mismatch",
