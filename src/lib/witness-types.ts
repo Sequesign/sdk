@@ -99,4 +99,4 @@ export type WitnessServiceDescription = {
   docs: string;
 };
 
-export type Tier = "free" | "paygo" | "enterprise" | "shared" | "managed_isolated" | "byo";
+export type Tier = "free" | "paygo" | "enterprise" | "standard" | "managed_isolated" | "byo";

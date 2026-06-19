@@ -259,6 +259,22 @@ export { formatInspectionReport } from "./inspect.js";
 // re-export it from the SDK root so they don't reimplement the challenge encoding.
 export { registrationChallengeSignature } from "../lib/registration.js";
 
+// Registry resolution helpers: resolve a registered action schema (by action
+// type or schema id) or a workflow profile to its canonical { ...,  hash }.
+// Clients recording in schema_validated / profile_constrained mode need these
+// to supply the schemaId+schemaHash (per action) and profile_id+profile_hash
+// (per session) that the schema policy verifies against the bundled registry —
+// previously the hashes could only be obtained by re-implementing the registry
+// lookup + canonical hash. Surfaced so the MCP server (and other consumers) can
+// drive validated/profile-bound recording without that duplication.
+export {
+  loadSchemaByActionType,
+  loadSchemaById,
+  loadProfileById,
+  loadManifest
+} from "../lib/schema-registry.js";
+export type { RegistryManifest } from "../lib/schema-registry.js";
+
 export type {
   Sdk,
   SdkConfig,
