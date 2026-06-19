@@ -150,7 +150,7 @@ test vectors in the repository's `docs/` directory.
 ## Documentation
 
 - Protocol spec, trust model, and primitives reference:
-  [github.com/Sequesign/Sequesign](https://github.com/Sequesign/Sequesign)
+  [github.com/Sequesign/protocol](https://github.com/Sequesign/protocol)
 - Hosted verifier: [verify.sequesign.com](https://verify.sequesign.com)
 
 ## License
