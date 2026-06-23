@@ -30,7 +30,9 @@ export type WitnessRequest = {
 export type WitnessAgentIdentity = {
   agent_public_key: string;
   agent_key_registered_at: string;
-  agent_identity_proof_ref: string | null;
+  // Per-API-key registry (migration 0021): every active registration carries a
+  // platform-signed proof, so this is always present (no self_asserted path).
+  agent_identity_proof_ref: string;
 };
 
 export type LogEntryRef = {

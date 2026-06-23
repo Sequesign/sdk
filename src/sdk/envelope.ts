@@ -12,6 +12,7 @@ import {
   type AssembledAction
 } from "../lib/envelope.js";
 import { agentIdentityAttestationFor } from "../lib/agent-identity.js";
+import { agentKeyFingerprint } from "../lib/hash.js";
 import type { AgentActionReceipt } from "../lib/types.js";
 import type { SessionState } from "./state.js";
 
@@ -38,8 +39,8 @@ export function buildReceiptEnvelope(args: BuildEnvelopeArgs): AgentActionReceip
   const witnessedIdentity = state.agentIdentity();
   const agentIdentityAttestation = witnessedIdentity
     ? agentIdentityAttestationFor({
-        agentPublicKey: witnessedIdentity.agent_public_key,
-        agentKeyRegisteredAt: witnessedIdentity.agent_key_registered_at,
+        registeredAt: witnessedIdentity.agent_key_registered_at,
+        agentKeyFingerprint: agentKeyFingerprint(witnessedIdentity.agent_public_key),
         agentIdentityProofRef: witnessedIdentity.agent_identity_proof_ref
       })
     : undefined;

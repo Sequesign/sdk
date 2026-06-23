@@ -1,6 +1,6 @@
 {
   "name": "@sequesign/sdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "TypeScript SDK and reference verifier for Sequesign, a protocol for cryptographically verifiable receipts of delegated AI work. Record actions in direct or managed mode, attach verified approver/counterparty identity via registered-key vouching, and verify receipts fully offline.",
   "license": "Apache-2.0",
   "repository": {

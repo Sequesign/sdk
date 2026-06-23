@@ -20,6 +20,17 @@ export function canonicalize(value: unknown): string {
 // a lone surrogate is rejected rather than serialized.
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
+// RFC 8785 requires well-formed Unicode for both string values and
+// property names. Reject a lone surrogate in either rather than letting
+// JSON.stringify silently emit it.
+function assertWellFormedUnicode(s: string, what: string): void {
+  if (LONE_SURROGATE.test(s)) {
+    throw new Error(
+      `Unsupported value in canonical JSON: ${what} contains a lone surrogate (RFC 8785 requires well-formed Unicode)`
+    );
+  }
+}
+
 function serialize(value: unknown): string {
   if (value === null) return "null";
 
@@ -41,11 +52,7 @@ function serialize(value: unknown): string {
 
   if (valueType === "string") {
     const s = value as string;
-    if (LONE_SURROGATE.test(s)) {
-      throw new Error(
-        "Unsupported value in canonical JSON: string contains a lone surrogate (RFC 8785 requires well-formed Unicode)"
-      );
-    }
+    assertWellFormedUnicode(s, "string");
     // RFC 8785 section 3.2.2.2 string escaping. JSON.stringify of a
     // standalone string produces the same escaping (short escapes for
     // the named control characters, \u00xx for the rest, raw output for
@@ -86,6 +93,10 @@ function serialize(value: unknown): string {
     for (const key of keys) {
       const item = input[key];
       if (item === undefined) continue;
+      // Property names are serialized as JSON strings too; hold them to the
+      // same well-formed-Unicode requirement as string values (a lone
+      // surrogate in a key would otherwise be emitted by JSON.stringify).
+      assertWellFormedUnicode(key, "property name");
       members.push(`${JSON.stringify(key)}:${serialize(item)}`);
     }
     return "{" + members.join(",") + "}";
