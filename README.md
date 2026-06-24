@@ -47,6 +47,54 @@ A key may be registered to an agent Ed25519 public key at creation;
 receipts produced under a registered key carry an
 `agent_identity_attestation` binding the work to that keypair.
 
+## Schema- and profile-constrained recording
+
+Receipts default to `freeform`. Set `mode` on `startSession` to have the SDK
+validate what you record against the bundled registry:
+
+- `schema_validated` — each action's evidence must match the registered JSON
+  Schema for its `actionType`;
+- `profile_constrained` — additionally, the chain must follow a workflow
+  profile (allowed / required actions and transitions).
+
+Resolve the registered profile and per-action schemas with the registry
+helpers (`loadProfileById`, `loadSchemaByActionType`, `loadSchemaById`,
+`loadManifest`) and pass their hashes; the SDK validates evidence as you
+record, and a verified receipt then reports `schema_valid` and (for a profile)
+`workflow_profile_valid`:
+
+```ts
+import { loadProfileById, loadSchemaByActionType } from "@sequesign/sdk";
+
+const profile = await loadProfileById("sequesign.invoice_payment.v0.1");
+
+const session = await sdk.startSession({
+  agent: { agentId: "agent_acme_001", keypair },
+  task: { taskId: "task_invoice_001", delegatorId: "finance_team" },
+  mode: "profile_constrained",
+  profile: { profile_id: profile.profileId, profile_hash: profile.profileHash }
+  // …plus the transport-specific fields from the modes above
+});
+
+const schema = await loadSchemaByActionType("policy_checked");
+await session.recordAction({
+  actionType: "policy_checked",
+  evidence: {
+    policy_version: "2026-01",
+    auto_pay_limit_usd: 5000,
+    invoice_amount_usd: 4200,
+    decision: "approved",
+    reason: "within auto-pay limit"
+  },
+  schemaId: schema.schemaId,
+  schemaHash: schema.schemaHash
+});
+```
+
+Evidence that does not match the schema is rejected at `recordAction` time,
+before it is signed. `examples/05-record-profile-constrained.ts` runs the full
+invoice-payment chain end to end.
+
 ## Verify a receipt offline
 
 ```ts
@@ -71,8 +119,8 @@ console.log(report.valid, report.verification_level);
 The verifier checks evidence hashes, the action hash chain, agent and
 witness signatures, attestation bindings, and (when the receipt declares
 them) schema and workflow-profile conformance. Verification levels L0
-through L5 and the independent witnessed flag are documented in the
-protocol spec.
+through L3 — plus the independent witnessed flag and approver/counterparty
+identity badges — are documented in the protocol spec.
 
 ## Registered-key vouching (verified approver/counterparty identity)
 
@@ -136,7 +184,7 @@ const report = await verifyReceiptPackage(packageDir, {
 ```
 
 Vouching is an independent badge: it raises the approver/counterparty
-identity legs but never changes the base L0–L5 level. Omit
+identity legs but never changes the base L0–L3 level. Omit
 `trustedRegistrationKeys` and the receipt still verifies — the leg simply
 stays `present_unverified`.
 

@@ -74,6 +74,19 @@ export async function validateEvidenceSchema(
         `Schema hash mismatch for ${evidence.schema_id}. Expected ${evidence.schema_hash}, computed ${loaded.schemaHash}.`
       ]
     };
+  // Bind the schema to the claimed action_type (issue #218). Each registry
+  // schema is registered against exactly one action_type; validating the
+  // content shape alone would let a receipt claim one action_type while
+  // supplying an unrelated schema's id + content and still report
+  // schema_valid=true (a semantic-integrity bypass). Reject when the schema
+  // the id resolves to is not the schema bound to the evidence's action_type.
+  if (loaded.actionType !== evidence.action_type)
+    return {
+      valid: false,
+      errors: [
+        `Schema ${evidence.schema_id} is registered for action_type "${loaded.actionType}", but the evidence claims action_type "${evidence.action_type}".`
+      ]
+    };
   const errors = validateValue(evidence.content, loaded.schema as JsonSchema, "content");
   return { valid: errors.length === 0, errors };
 }

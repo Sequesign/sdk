@@ -20,6 +20,7 @@ Plus the two cross-cutting flows:
 | ---------------------- | ------------------------------------------------------- | ------------------------------- |
 | `01-verify-offline.ts` | Verify a receipt with **no** Sequesign call and no keys | nothing                         |
 | `03-vouch-approval.ts` | A **vouched approver** whose identity verifies offline  | API key + agent + approver keys |
+| `05-record-profile-constrained.ts` | A **schema- and workflow-validated** chain (`schema_valid` + `workflow_profile_valid`) | API key + agent key |
 
 These examples use the keys you already have — your registered agent (and
 approver) keys. They do not generate keys; that is not how the SDK is used in
@@ -174,6 +175,37 @@ npx tsx examples/03-vouch-approval.ts
 ```
 
 `SEQUESIGN_APPROVER_PARTY_TYPE` may be `human` (default) or `agent`.
+
+## 05 — A schema- and profile-constrained chain
+
+Records the `invoice_payment.v0.1` profile end to end — `task_created` →
+`policy_checked` → `llm_invoice_reviewed` → `payment_instruction_created`. Each
+action's evidence is validated against its registered JSON Schema before it is
+signed, and the sequence is checked against the workflow profile, so the
+verified receipt reports both `schema_valid` and `workflow_profile_valid`. The
+schema/profile hashes are resolved from the bundled registry via
+`loadProfileById` / `loadSchemaByActionType` — no hand-computed hashes.
+
+```bash
+export SEQUESIGN_AGENT_PRIVATE_KEY="$(cat agent.key.pem)"
+export SEQUESIGN_API_KEY="<write-class api key>"            # the witness requires it
+npx tsx examples/05-record-profile-constrained.ts
+```
+
+```text
+Recording the sequesign.invoice_payment.v0.1 chain (schema- and workflow-validated)...
+  recorded task_created (validated against sequesign.task_created.v0.1)
+  recorded policy_checked (validated against sequesign.policy_checked.v0.1)
+  recorded llm_invoice_reviewed (validated against sequesign.llm_invoice_reviewed.v0.1)
+  recorded payment_instruction_created (validated against sequesign.payment_instruction_created.v0.1)
+Receipt assembled locally: rec_…
+level=L2_KEY_BOUND  schema_valid=true  workflow_profile_valid=true
+```
+
+Try breaking it to see the gate fire: change a required evidence field (e.g.
+drop `reason` from `policy_checked`) and `recordAction` throws before signing;
+set `policy_checked.decision` to `"requires_human_approval"` and the profile
+rejects paying without a `human_approval_received` action in between.
 
 ## Verify in the browser
 
