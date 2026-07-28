@@ -134,6 +134,13 @@ export interface SessionInit {
   };
   mode?: ReceiptMode;
   profile?: ProfileReference;
+  // Parameter values bound to a parameterized profile (template system).
+  // Requires `profile`. At session start the values are validated + bound
+  // against the profile's `parameters` declarations; the resulting
+  // params_hash is committed into the chain genesis (SEQUESIGN_GENESIS_V1)
+  // and emitted on the receipt. Omit for unparameterized sessions, which
+  // keep the legacy V0 genesis byte-identical.
+  params?: Record<string, unknown>;
   schemaReferences?: SchemaReference[];
   chainId?: string;
   receiptId?: string;
@@ -158,9 +165,7 @@ export interface SessionInit {
 // ("infinity" also accepted under `until`) or an ISO8601 duration.
 // The two forms are parsed at the broker, not in the SDK, so a future
 // duration format change does not require an SDK release.
-export type RetentionInput =
-  | { until: string }
-  | { duration: string };
+export type RetentionInput = { until: string } | { duration: string };
 
 export interface UnsupportedClaim {
   claim: string;
@@ -264,9 +269,7 @@ export interface Session {
     spec: ToolWrapSpec<TArgs, TResult>
   ): WrappedTool<TArgs, TResult>;
   checkpoint(): SessionCheckpoint;
-  fetchInclusionProofs(
-    options?: FetchInclusionProofsOptions
-  ): Promise<FetchInclusionProofsResult>;
+  fetchInclusionProofs(options?: FetchInclusionProofsOptions): Promise<FetchInclusionProofsResult>;
   finalize(options?: FinalizeOptions): Promise<FinalizeResult>;
 }
 

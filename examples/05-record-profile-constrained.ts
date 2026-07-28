@@ -27,11 +27,7 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import path from "node:path";
 
-import {
-  createSequesign,
-  loadProfileById,
-  loadSchemaByActionType
-} from "@sequesign/sdk";
+import { createSequesign, loadProfileById, loadSchemaByActionType } from "@sequesign/sdk";
 import type { KeyMaterial, Session } from "@sequesign/sdk";
 import {
   verifyReceiptPackage,

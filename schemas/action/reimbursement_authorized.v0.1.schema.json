@@ -1,0 +1,18 @@
+{
+  "schema_id": "sequesign.reimbursement_authorized.v0.1",
+  "type": "object",
+  "required": ["expense_report_ref", "amount", "authorized_by"],
+  "properties": {
+    "expense_report_ref": {
+      "type": "string"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0
+    },
+    "authorized_by": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

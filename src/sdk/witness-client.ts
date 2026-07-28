@@ -14,7 +14,11 @@ import {
   WitnessSignatureMismatchError,
   WitnessUnavailableError
 } from "./errors.js";
-import { createKeyDiscoveryClient, type KeyDiscoveryClient, type WitnessIdentity } from "./key-discovery.js";
+import {
+  createKeyDiscoveryClient,
+  type KeyDiscoveryClient,
+  type WitnessIdentity
+} from "./key-discovery.js";
 import type { WitnessConfig } from "./types.js";
 
 export const DEFAULT_WITNESS_BASE_URL = "https://witness.sequesign.com";
@@ -39,9 +43,10 @@ export function resolveWitnessConfig(
   override: WitnessConfig | undefined,
   defaults: WitnessConfig | undefined
 ): ResolvedWitnessConfig {
-  const baseUrl = (
-    override?.baseUrl ?? defaults?.baseUrl ?? DEFAULT_WITNESS_BASE_URL
-  ).replace(/\/+$/, "");
+  const baseUrl = (override?.baseUrl ?? defaults?.baseUrl ?? DEFAULT_WITNESS_BASE_URL).replace(
+    /\/+$/,
+    ""
+  );
   const witnessId = override?.witnessId ?? defaults?.witnessId;
   const apiKey = override?.apiKey ?? defaults?.apiKey;
   const requestTimeoutMs =
@@ -113,9 +118,7 @@ export interface WitnessClient {
   ): Promise<BatchInclusionProof>;
 }
 
-export async function connectWitness(
-  config: ResolvedWitnessConfig
-): Promise<WitnessClient> {
+export async function connectWitness(config: ResolvedWitnessConfig): Promise<WitnessClient> {
   const discovery: KeyDiscoveryClient = createKeyDiscoveryClient({
     baseUrl: config.baseUrl,
     fetchImpl: config.fetchImpl,
@@ -146,11 +149,7 @@ export async function connectWitness(
         const { agent_identity: agentIdentity, ...attestation } = response;
         validateResponseShape(request, attestation);
         if (witnessId && attestation.witness_id !== witnessId) {
-          throw new WitnessResponseMismatchError(
-            "witness_id",
-            witnessId,
-            attestation.witness_id
-          );
+          throw new WitnessResponseMismatchError("witness_id", witnessId, attestation.witness_id);
         }
         let verified = verifyAttestation(attestation, currentKey);
         if (!verified) {
@@ -440,11 +439,7 @@ function validateResponseShape(request: WitnessRequest, attestation: WitnessAtte
   ] as const;
   for (const field of fields) {
     if (attestation[field] !== request[field]) {
-      throw new WitnessResponseMismatchError(
-        field,
-        request[field],
-        attestation[field]
-      );
+      throw new WitnessResponseMismatchError(field, request[field], attestation[field]);
     }
   }
 }

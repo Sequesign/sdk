@@ -37,10 +37,7 @@ export function createKeyDiscoveryClient(opts: KeyDiscoveryOptions): KeyDiscover
     try {
       response = await fetchImpl(`${base}/`, { method: "GET" });
     } catch (err) {
-      throw new WitnessUnavailableError(
-        `Unable to reach witness service at ${base}/.`,
-        err
-      );
+      throw new WitnessUnavailableError(`Unable to reach witness service at ${base}/.`, err);
     }
     if (!response.ok) {
       throw new WitnessUnavailableError(

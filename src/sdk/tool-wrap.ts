@@ -1,9 +1,5 @@
 import type { Session } from "./types.js";
-import type {
-  RecordActionInput,
-  ToolWrapSpec,
-  WrappedTool
-} from "./types.js";
+import type { RecordActionInput, ToolWrapSpec, WrappedTool } from "./types.js";
 
 export function createWrappedTool<TArgs extends readonly unknown[], TResult>(
   session: Session,

@@ -1,0 +1,47 @@
+{
+  "profile_id": "sequesign.invoice_approval.v0.1",
+  "description": "Parameterized invoice approval mandate (template system). Same workflow as invoice_payment, plus bound parameters (spend ceiling, currency, vendor allowlist) committed into the chain genesis.",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "max_amount": { "type": "number", "required": true },
+    "currency": { "type": "string", "default": "USD" },
+    "vendor_allowlist": { "type": "array", "required": false }
+  },
+  "allowed_actions": [
+    "task_created",
+    "policy_checked",
+    "llm_invoice_reviewed",
+    "human_approval_received",
+    "payment_instruction_created"
+  ],
+  "required_actions": [
+    "task_created",
+    "policy_checked",
+    "llm_invoice_reviewed",
+    "payment_instruction_created"
+  ],
+  "allowed_transitions": [
+    ["START", "task_created"],
+    ["task_created", "policy_checked"],
+    ["policy_checked", "llm_invoice_reviewed"],
+    ["llm_invoice_reviewed", "human_approval_received"],
+    ["human_approval_received", "payment_instruction_created"],
+    ["llm_invoice_reviewed", "payment_instruction_created"]
+  ],
+  "conditional_requirements": [
+    {
+      "if_action": "policy_checked",
+      "field_path": "content.decision",
+      "equals": "requires_human_approval",
+      "required_prior_to": {
+        "action": "payment_instruction_created",
+        "must_include": "human_approval_received"
+      }
+    }
+  ],
+  "required_attestations": {
+    "human_approval_received": ["human_signature"],
+    "payment_instruction_created": ["agent_signature", "witness_signature"]
+  },
+  "allowed_final_actions": ["payment_instruction_created"]
+}

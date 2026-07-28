@@ -27,6 +27,7 @@ import type {
   ApprovalAttestation,
   ProfileReference,
   ReceiptMode,
+  ReceiptConformance,
   ReceiptSchemaVersion,
   SchemaReference,
   WitnessAttestation
@@ -65,13 +66,15 @@ export interface AssembleReceiptArgs {
   // agent_identity_attestation field at all (byte-identical to a
   // pre-v0.5-feature unregistered receipt).
   agentIdentityAttestation?: AgentIdentityAttestation;
+  // Phase 4: the producer's self-assessed mandate conformance. Provided only
+  // when the sealed work is NONCONFORMANT (the violation-preserving seal
+  // records the breach); a conformant receipt omits it and stays v2.1.0/v2.0.0
+  // byte-identical to before, since the verifier recomputes conformance either
+  // way. Its presence advertises v2.2.0.
+  conformance?: ReceiptConformance;
 }
 
-const RECEIPT_SCHEMA_VERSION: ReceiptSchemaVersion = "sequesign.receipt.v2.0.0";
-
-export function assembleAgentActionReceipt(
-  args: AssembleReceiptArgs
-): AgentActionReceipt {
+export function assembleAgentActionReceipt(args: AssembleReceiptArgs): AgentActionReceipt {
   // v0.5 emits a single receipt schema version. The pre-v0.4 split
   // between v0.2 and v0.3 (based on whether witness attestations
   // carried log fields) is gone; log fields remain optional on the
@@ -86,14 +89,29 @@ export function assembleAgentActionReceipt(
   const profileRef = args.profile
     ? {
         profile_id: args.profile.profile_id,
-        profile_hash: args.profile.profile_hash
+        profile_hash: args.profile.profile_hash,
+        // Emitted for parameterized profiles so the verifier can recompute the
+        // chain genesis (SEQUESIGN_GENESIS_V1). undefined is omitted by
+        // JSON.stringify, so an unparameterized receipt stays byte-identical.
+        params_hash: args.profile.params_hash
       }
     : undefined;
+  // Version ladder: a receipt carrying a sealed conformance block (a recorded
+  // mandate violation) advertises v2.2.0; a parameterized receipt (params_hash,
+  // V1 genesis) advertises v2.1.0; everything else stays v2.0.0, byte-identical
+  // to before. A conformant receipt never carries the block, so the common
+  // parameterized/plain paths are unchanged and the version bump is a real
+  // signal that this receipt records nonconformance.
+  const schemaVersion: ReceiptSchemaVersion = args.conformance
+    ? "sequesign.receipt.v2.2.0"
+    : profileRef?.params_hash
+      ? "sequesign.receipt.v2.1.0"
+      : "sequesign.receipt.v2.0.0";
   const counterpartyAttestations = args.counterpartyAttestations ?? [];
   const schemaReferences = args.schemaReferences ?? [];
 
   return {
-    schema_version: RECEIPT_SCHEMA_VERSION,
+    schema_version: schemaVersion,
     receipt_id: args.receiptId,
     receipt_mode: args.receiptMode,
     agent_id: args.agent.agentId,
@@ -122,7 +140,9 @@ export function assembleAgentActionReceipt(
       counterpartyAttestations.length > 0 ? counterpartyAttestations : undefined,
     evidence_references: args.actions.map((a) => a.evidenceReference),
     profile: profileRef,
-    schema_references:
-      schemaReferences.length > 0 ? schemaReferences : undefined
+    schema_references: schemaReferences.length > 0 ? schemaReferences : undefined,
+    // Omitted from the wire form when undefined; present only for a sealed
+    // nonconformance (v2.2.0).
+    conformance: args.conformance
   };
 }

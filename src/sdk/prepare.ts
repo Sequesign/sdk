@@ -382,6 +382,21 @@ export function assembleFinalize(input: AssembleFinalizeInput): AssembleFinalize
   const first = ordered[0];
   const finalChainState = last.agentAttestation.chain_state;
 
+  // This assembly path seeds the V0 genesis (initialChainState(chainId)); it
+  // does not perform parameter binding, so it never produces a V1 genesis.
+  // A params_hash on the session's ProfileReference (the public type allows
+  // it) was not bound into this chain and would otherwise make the envelope
+  // advertise v2.1.0 while the chain root is V0 — a receipt the verifier then
+  // rejects with genesis_binding_mismatch. Strip it so this path only ever
+  // emits a valid V0 / v2.0.0 receipt. Mirrors the direct session's V0 path
+  // (src/sdk/session.ts). Managed sessions likewise reject init.params, so the
+  // only genesis-bound path is the direct SDK session.
+  let profileForV0 = session.profile;
+  if (profileForV0?.params_hash) {
+    const { params_hash: _strippedParamsHash, ...withoutParamsHash } = profileForV0;
+    profileForV0 = withoutParamsHash;
+  }
+
   const receipt = assembleAgentActionReceipt({
     receiptId: session.receiptId,
     receiptMode: session.receiptMode,
@@ -404,7 +419,7 @@ export function assembleFinalize(input: AssembleFinalizeInput): AssembleFinalize
     actions: assembled,
     approvalAttestations: input.approvalAttestations,
     counterpartyAttestations: input.counterpartyAttestations,
-    profile: session.profile,
+    profile: profileForV0,
     schemaReferences: session.schemaReferences
   });
 

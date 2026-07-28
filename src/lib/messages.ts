@@ -157,3 +157,20 @@ export function registrationChallengeMessage(p: {
     p.subjectKeyFingerprint
   ]);
 }
+// Template system Phase 5: the platform's anchor proof over a template. The
+// registration key signs (template_id, profile_hash, anchored_at), binding the
+// canonical profile document (its profile_hash) to a point in time. Verifiable
+// offline against the published registration key. Domain-separated from every
+// other signed payload.
+export function templateAnchorMessage(p: {
+  templateId: string;
+  profileHash: string;
+  anchoredAt: string;
+}): Buffer {
+  return lengthPrefixedUtf8([
+    "SEQUESIGN_TEMPLATE_ANCHOR_V0",
+    p.templateId,
+    p.profileHash,
+    p.anchoredAt
+  ]);
+}

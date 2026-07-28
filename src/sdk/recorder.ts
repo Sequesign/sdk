@@ -116,9 +116,7 @@ export interface BuildApprovalArgs {
   identityProof?: IdentityProof;
 }
 
-export function buildApprovalAttestation(
-  args: BuildApprovalArgs
-): ApprovalAttestation {
+export function buildApprovalAttestation(args: BuildApprovalArgs): ApprovalAttestation {
   const approvalContextHash = hashCanonical(args.approvalContext);
   const message = approvalMessage({
     approvalId: args.approvalId,
@@ -175,9 +173,7 @@ export interface BuildCounterpartyArgs {
   identityProof?: IdentityProof;
 }
 
-export function buildCounterpartyAttestation(
-  args: BuildCounterpartyArgs
-): CounterpartyAttestation {
+export function buildCounterpartyAttestation(args: BuildCounterpartyArgs): CounterpartyAttestation {
   const message = counterpartyAttestationMessage({
     counterpartyId: args.counterpartyId,
     chainId: args.chainId,

@@ -60,23 +60,65 @@
       "action_type": "work_submitted",
       "path": "schemas/action/work_submitted.v0.1.schema.json",
       "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.submit_prior_auth.v0.1",
+      "action_type": "submit_prior_auth",
+      "path": "schemas/action/submit_prior_auth.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.expense_reviewed.v0.1",
+      "action_type": "expense_reviewed",
+      "path": "schemas/action/expense_reviewed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.reimbursement_authorized.v0.1",
+      "action_type": "reimbursement_authorized",
+      "path": "schemas/action/reimbursement_authorized.v0.1.schema.json",
+      "hash_alg": "sha256"
     }
   ],
   "profiles": [
     {
       "profile_id": "sequesign.invoice_payment.v0.1",
       "path": "profiles/invoice_payment.v0.1.profile.json",
-      "hash_alg": "sha256"
+      "hash_alg": "sha256",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.invoice_approval.v0.1",
+      "path": "profiles/invoice_approval.v0.1.profile.json",
+      "hash_alg": "sha256",
+      "signature_path": "profiles/invoice_approval.v0.1.profile.sig.json",
+      "tier": "official"
     },
     {
       "profile_id": "sequesign.invoice_payment.workflow_fail_demo.v0.1",
       "path": "profiles/invoice_payment.workflow_fail_demo.v0.1.profile.json",
-      "hash_alg": "sha256"
+      "hash_alg": "sha256",
+      "tier": "experimental"
     },
     {
       "profile_id": "sequesign.agent_marketplace_work.v0.1",
       "path": "profiles/agent_marketplace_work.v0.1.profile.json",
-      "hash_alg": "sha256"
+      "hash_alg": "sha256",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.prior_auth_submission.v0.1",
+      "path": "profiles/prior_auth_submission.v0.1.profile.json",
+      "hash_alg": "sha256",
+      "signature_path": "profiles/prior_auth_submission.v0.1.profile.sig.json",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.expense_reimbursement.v0.1",
+      "path": "profiles/expense_reimbursement.v0.1.profile.json",
+      "hash_alg": "sha256",
+      "signature_path": "profiles/expense_reimbursement.v0.1.profile.sig.json",
+      "tier": "official"
     }
   ]
 }

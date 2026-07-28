@@ -36,15 +36,12 @@ import path from "node:path";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import { hashCanonical, sha256Hex } from "../lib/hash.js";
-import { lengthPrefixedUtf8 } from "../lib/encoding.js";
+import { hashCanonical } from "../lib/hash.js";
+import { resolveGenesisBinding } from "./genesis-binding.js";
 import { verifyEd25519 } from "../lib/keys.js";
 import { approvalMessage } from "../lib/messages.js";
 import { ensureDir, resetDir } from "../lib/io.js";
-import {
-  isCanonicalCounterpartyId,
-  isValidApproverId
-} from "../lib/package-layout.js";
+import { isCanonicalCounterpartyId, isValidApproverId } from "../lib/package-layout.js";
 import { verifyReceiptPackage, witnessKeysFromReceipt } from "../lib/verify.js";
 import type {
   ActionRecord,
@@ -52,6 +49,7 @@ import type {
   CounterpartyAttestation,
   EvidenceBlob,
   ApprovalAttestation,
+  ReceiptConformance,
   VerifiabilityClass,
   VerificationReport
 } from "../lib/types.js";
@@ -64,8 +62,10 @@ import {
   NotImplementedError,
   PackageStateError,
   PlanReferenceError,
+  ProfileValidationError,
   SessionStateError
 } from "./errors.js";
+import { evaluateMandate } from "../lib/profile.js";
 import {
   generateActionId,
   generateApprovalId,
@@ -114,10 +114,7 @@ import type {
   ToolWrapSpec,
   WrappedTool
 } from "./types.js";
-import {
-  PLAN_GENERATED_ACTION_TYPE,
-  PLAN_STEP_EXECUTED_ACTION_TYPE
-} from "./types.js";
+import { PLAN_GENERATED_ACTION_TYPE, PLAN_STEP_EXECUTED_ACTION_TYPE } from "./types.js";
 
 // §3.2 PR 3: checkpoint and resume parity are not in scope; managed
 // sessions cannot persist or resume across processes. fetchInclusion
@@ -147,10 +144,24 @@ export async function startManagedSessionImpl(args: {
 
   const chainId = init.chainId ?? generateChainId();
   const receiptId = init.receiptId ?? generateReceiptId();
-  const initialChainState = sha256Hex(
-    lengthPrefixedUtf8(["SEQUESIGN_INITIAL_STATE_V0", chainId])
-  );
   const mode = init.mode ?? "freeform";
+
+  // Genesis binding via the same shared helper the direct path uses. A
+  // parameterized managed session commits the mandate into SEQUESIGN_GENESIS_V1
+  // client-side (exactly as direct mode does) and seals a v2.1.0 envelope; the
+  // broker's finalize handler recomputes and accepts that genesis. An
+  // unparameterized session keeps the byte-identical V0 genesis, and a stray
+  // params_hash on the caller's ProfileReference is stripped. Parameterized
+  // mandates are no longer rejected in managed mode.
+  const { profileRef, initialChainState, boundParams, profileDocument, profileAuthorSignature } =
+    await resolveGenesisBinding({
+      chainId,
+      taskId: init.task.taskId,
+      delegatorId: init.task.delegatorId,
+      agentId: init.agent.agentId,
+      profile: init.profile,
+      params: init.params
+    });
 
   const state = new SessionState({
     chainId,
@@ -165,7 +176,10 @@ export async function startManagedSessionImpl(args: {
     initialChainState,
     sequenceStart: 1,
     schemaReferences: init.schemaReferences,
-    profile: init.profile,
+    profile: profileRef,
+    boundParams,
+    profileDocument,
+    profileAuthorSignature,
     retention: init.retention
   });
 
@@ -243,8 +257,7 @@ class ManagedSession implements Session {
     const sequence = this._state.sequenceNext;
     const actionType = input.actionType;
     const actionId = input.actionId ?? generateActionId(sequence, actionType);
-    const verifiabilityClass: VerifiabilityClass =
-      input.verifiabilityClass ?? "deterministic";
+    const verifiabilityClass: VerifiabilityClass = input.verifiabilityClass ?? "deterministic";
 
     // Build the evidence blob WITH schema fields so the canonical
     // hash commits them. Without these in the rebuilt blob the
@@ -260,8 +273,7 @@ class ManagedSession implements Session {
     await applySchemaPolicy(this._state, input, evidenceBlob);
 
     const evidenceHash = hashCanonical(evidenceBlob);
-    const policyContextHash =
-      input.policyContextHash ?? this._state.policyContextHash;
+    const policyContextHash = input.policyContextHash ?? this._state.policyContextHash;
     const timestamp = input.timestamp ?? nowIso();
     const previousChainState = this._state.currentChainState;
     const actionRecord = buildActionRecord({
@@ -280,17 +292,15 @@ class ManagedSession implements Session {
       timestamp,
       metadata: input.metadata
     });
-    const { actionRecordHash, nextChainState, agentAttestation } =
-      extendChainWithAction({
-        actionRecord,
-        agentPrivateKeyPem: this.agentPrivateKeyPem,
-        agentId: this._state.agentId,
-        agentPublicKeyPem: this._state.agentPublicKeyPem
-      });
+    const { actionRecordHash, nextChainState, agentAttestation } = extendChainWithAction({
+      actionRecord,
+      agentPrivateKeyPem: this.agentPrivateKeyPem,
+      agentId: this._state.agentId,
+      agentPublicKeyPem: this._state.agentPublicKeyPem
+    });
 
     const sendsEvidence =
-      this.managed.evidenceCustody === "sequesign" ||
-      this.managed.evidenceCustody === "both";
+      this.managed.evidenceCustody === "sequesign" || this.managed.evidenceCustody === "both";
 
     const response = await this.intermediary.postReceipt({
       agentId: this._state.agentId,
@@ -312,6 +322,13 @@ class ManagedSession implements Session {
       sequence,
       previousChainState,
       deferEnvelopeStorage: true,
+      // Forward the version this receipt will finalize as so the witness log
+      // records it correctly: a parameterized session (profile carries the
+      // bound params_hash) seals v2.1.0, everything else v2.0.0. Mirrors the
+      // direct path (session.ts).
+      receiptSchemaVersion: this._state.profile?.params_hash
+        ? "sequesign.receipt.v2.1.0"
+        : "sequesign.receipt.v2.0.0",
       metadata: input.metadata,
       schemaId: input.schemaId,
       schemaHash: input.schemaHash,
@@ -342,9 +359,7 @@ class ManagedSession implements Session {
     // custody, so the SDK pins these to mirror the broker's
     // serializer.
     const customerHoldsEvidence = this.managed.evidenceCustody === "customer";
-    const envelopeEvidencePath = customerHoldsEvidence
-      ? "external"
-      : `evidence/${evidenceFile}`;
+    const envelopeEvidencePath = customerHoldsEvidence ? "external" : `evidence/${evidenceFile}`;
     const envelopeEvidenceCustody = customerHoldsEvidence
       ? ("external_client_managed" as const)
       : ("sequesign_hosted" as const);
@@ -385,9 +400,7 @@ class ManagedSession implements Session {
     };
   }
 
-  async recordApproval(
-    input: RecordApprovalInput
-  ): Promise<ApprovalAttestation> {
+  async recordApproval(input: RecordApprovalInput): Promise<ApprovalAttestation> {
     // §3.2 PR 3: mirrors src/sdk/session.ts recordApproval. No
     // witness call (direct mode does not call the witness either);
     // the attestation accumulates in SessionState and the broker
@@ -422,9 +435,7 @@ class ManagedSession implements Session {
         approvalContextHash: attestation.approval_context_hash,
         approvedAt: attestation.approved_at
       });
-      if (
-        !verifyEd25519(attestation.approver_public_key, message, attestation.signature)
-      ) {
+      if (!verifyEd25519(attestation.approver_public_key, message, attestation.signature)) {
         throw new ApprovalError(
           "approver_signature_invalid",
           `Attached approval's signature does not verify against the supplied approver_public_key (approver_id=${attestation.approver_id}).`
@@ -473,10 +484,7 @@ class ManagedSession implements Session {
     const priorApproval = this._state
       .approvals()
       .find((a) => a.approver_id === attestation.approver_id);
-    if (
-      priorApproval &&
-      priorApproval.approver_public_key !== attestation.approver_public_key
-    ) {
+    if (priorApproval && priorApproval.approver_public_key !== attestation.approver_public_key) {
       throw new ApprovalError(
         "approver_key_mismatch",
         `approver_id "${attestation.approver_id}" already approved with a different approver_public_key in this chain.`
@@ -564,10 +572,7 @@ class ManagedSession implements Session {
     const prior = this._state
       .counterpartyAttestations()
       .find((a) => a.counterparty_id === attestation.counterparty_id);
-    if (
-      prior &&
-      prior.counterparty_public_key !== attestation.counterparty_public_key
-    ) {
+    if (prior && prior.counterparty_public_key !== attestation.counterparty_public_key) {
       throw new CounterpartyAttestationError(
         "counterparty_key_mismatch",
         `counterparty_id "${attestation.counterparty_id}" already attested with a different counterparty_public_key in this chain.`
@@ -613,9 +618,7 @@ class ManagedSession implements Session {
   async recordPlanStep(input: RecordPlanStepInput): Promise<RecordedAction> {
     // §3.2 PR 3: plan-reference check + wrapper over managed
     // recordAction, matching direct.
-    const planAction = this._state
-      .actions()
-      .find((a) => a.action_id === input.planActionId);
+    const planAction = this._state.actions().find((a) => a.action_id === input.planActionId);
     if (!planAction) {
       throw new PlanReferenceError(
         `No recorded plan_generated action with action_id "${input.planActionId}" exists in the chain. Record a plan with recordPlan before referencing it.`,
@@ -684,13 +687,37 @@ class ManagedSession implements Session {
       throw new SessionStateError("Session is already finalized.");
     }
     if (this._state.snapshot().actionsRecorded === 0) {
-      throw new FinalizationError(
-        "Cannot finalize a session that has not recorded any actions."
-      );
+      throw new FinalizationError("Cannot finalize a session that has not recorded any actions.");
+    }
+    // Phase 4 (violation-preserving seal): evaluate the mandate client-side and
+    // seal a conformance block for nonconformant work, mirroring direct mode.
+    // The broker re-evaluates and accepts nonconformant receipts too; a hard
+    // failure (unresolvable profile / hash mismatch) is unsealable and throws.
+    let sealedConformance: ReceiptConformance | undefined;
+    if (this._state.mode === "profile_constrained" && this._state.profile) {
+      const evidenceBlobs = this.collectEvidenceBlobsInOrder(this._state.actions());
+      const mandate = await evaluateMandate({
+        profileId: this._state.profile.profile_id,
+        profileHash: this._state.profile.profile_hash,
+        actions: this._state.actions(),
+        evidence: evidenceBlobs,
+        boundParams: this._state.boundParams,
+        embeddedProfile: this._state.profileDocument
+      });
+      if (!mandate.resolved || !mandate.profileHashVerified) {
+        throw new ProfileValidationError(this._state.profile.profile_id, mandate.hardErrors);
+      }
+      if (!mandate.conformant) {
+        sealedConformance = { conformant: false, violations: mandate.violations };
+        console.warn(
+          `Sequesign: sealing a managed receipt whose work does not conform to mandate ${this._state.profile.profile_id}: ${mandate.violations.join("; ")}`
+        );
+      }
     }
     const receipt = buildReceiptEnvelope({
       state: this._state,
-      finalChainState: this._state.currentChainState
+      finalChainState: this._state.currentChainState,
+      conformance: sealedConformance
     });
 
     // Local verification first. The intermediary will re-run the
@@ -745,7 +772,12 @@ class ManagedSession implements Session {
             : this.collectEvidenceBlobsInOrder(actionRecords),
         evidenceCustody: this.managed.evidenceCustody,
         envelopeCustody: this.managed.envelopeCustody,
-        retention: this._state.retention
+        retention: this._state.retention,
+        // Embed-first packaging (Phase 3): a parameterized session transmits its
+        // bound values so the broker can store params.json alongside the hosted
+        // package, and a later download carries the human-readable mandate (not
+        // just the opaque params_hash). Undefined for unparameterized sessions.
+        boundParams: this._state.boundParams
       });
       r2Key = finalize.r2Key;
       receiptUrl = finalize.receiptUrl;
@@ -775,9 +807,7 @@ class ManagedSession implements Session {
   // the finalize upload's parallel arrays line up. Throws if any
   // action lacks a cached blob, which would indicate a programming
   // error in recordAction.
-  private collectEvidenceBlobsInOrder(
-    actionRecords: ActionRecord[]
-  ): EvidenceBlob[] {
+  private collectEvidenceBlobsInOrder(actionRecords: ActionRecord[]): EvidenceBlob[] {
     const blobs: EvidenceBlob[] = [];
     for (const action of actionRecords) {
       const cached = this.cachedEvidence.get(action.action_id);
@@ -815,6 +845,28 @@ class ManagedSession implements Session {
     // Write actions.jsonl (one line per action).
     for (const action of this._state.actions()) {
       await writer.appendActionLine(action);
+    }
+
+    // Embed-first packaging (Phase 3): a parameterized session's bound mandate
+    // travels in the package as params.json, exactly as in direct mode — so a
+    // configured local package carries the human-readable values (not just the
+    // opaque params_hash), and the SDK-side verifier re-hashes them against the
+    // committed profile.params_hash. Undefined for unparameterized sessions.
+    if (this._state.boundParams !== undefined) {
+      await writer.writeParams(this._state.boundParams);
+    }
+    // Embed-first packaging (Phase 3): the profile_constrained mandate's rules
+    // travel in the package as profile.json, exactly as in direct mode, so the
+    // downloaded package re-resolves the workflow and re-verifies profile_hash
+    // offline with no registry. Undefined for freeform sessions.
+    if (this._state.profileDocument !== undefined) {
+      await writer.writeProfile(this._state.profileDocument);
+    }
+    // Template system Phase 5: the template-author signature travels as
+    // profile.sig.json alongside profile.json, so the downloaded managed package
+    // grades template_authenticity offline. Undefined for unsigned profiles.
+    if (this._state.profileAuthorSignature !== undefined) {
+      await writer.writeProfileSig(this._state.profileAuthorSignature);
     }
 
     // Write key files: agent, witness, approvers, counterparties.
@@ -859,9 +911,7 @@ class ManagedSession implements Session {
   // temp dir when packageConfig is absent. inspect does NOT call
   // this; inspect uses materializeInspectPackage which always
   // creates and cleans up a throwaway temp dir.
-  private async materializePackage(args: {
-    cleanupAfter: boolean;
-  }): Promise<{
+  private async materializePackage(args: { cleanupAfter: boolean }): Promise<{
     writer: PackageWriter;
     directory: string;
     usingTemp: boolean;
@@ -874,10 +924,7 @@ class ManagedSession implements Session {
     const writer = createPackageWriter(directory);
 
     if (this.packageConfig) {
-      await initPackageDirectory(
-        directory,
-        this.packageConfig.ifExists ?? "fail"
-      );
+      await initPackageDirectory(directory, this.packageConfig.ifExists ?? "fail");
     }
 
     await this.writeStateInto(writer);
@@ -912,9 +959,7 @@ class ManagedSession implements Session {
     directory: string;
     cleanup: () => Promise<void>;
   }> {
-    const directory = await mkdtemp(
-      path.join(tmpdir(), "sequesign-managed-inspect-")
-    );
+    const directory = await mkdtemp(path.join(tmpdir(), "sequesign-managed-inspect-"));
     try {
       const writer = createPackageWriter(directory);
       await this.writeStateInto(writer);
@@ -934,9 +979,7 @@ class ManagedSession implements Session {
       // the half-populated temp dir so we do not leak it; swallow
       // the cleanup failure because the original error is what the
       // caller needs to see.
-      await rm(directory, { recursive: true, force: true }).catch(
-        () => undefined
-      );
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
       throw err;
     }
   }
@@ -991,9 +1034,7 @@ class ManagedSession implements Session {
 // Mirrors the deduplicators in src/sdk/session.ts. First-seen wins
 // per id; the call sites above already reject same-id different-key
 // pairs, so the ordering is stable.
-function distinctApproverKeysFrom(
-  attestations: ApprovalAttestation[]
-): ApproverPublicKey[] {
+function distinctApproverKeysFrom(attestations: ApprovalAttestation[]): ApproverPublicKey[] {
   const seen = new Set<string>();
   const result: ApproverPublicKey[] = [];
   for (const att of attestations) {
@@ -1028,9 +1069,7 @@ async function initPackageDirectory(
   ifExists: "fail" | "reset" | "resume"
 ): Promise<void> {
   if (ifExists === "resume") {
-    throw new NotImplementedError(
-      'package.ifExists="resume" in managed mode'
-    );
+    throw new NotImplementedError('package.ifExists="resume" in managed mode');
   }
   if (ifExists === "reset") {
     await resetDir(directory);
@@ -1050,4 +1089,3 @@ async function initPackageDirectory(
   }
   await ensureDir(directory);
 }
-

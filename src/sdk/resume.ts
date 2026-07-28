@@ -2,18 +2,13 @@ import path from "node:path";
 import { readJson } from "../lib/io.js";
 import { extendChain } from "../lib/chain.js";
 import { hashCanonical } from "../lib/hash.js";
+import { computeGenesisV0, computeGenesisV1 } from "../lib/genesis.js";
+import { paramsHash } from "../lib/mandate-params.js";
 import { verifyEd25519 } from "../lib/keys.js";
-import {
-  agentAttestationMessage,
-  witnessAttestationMessage
-} from "../lib/messages.js";
+import { agentAttestationMessage, witnessAttestationMessage } from "../lib/messages.js";
 import type { ActionRecord, EvidenceBlob } from "../lib/types.js";
 import { ResumeError } from "./errors.js";
-import {
-  createPackageWriter,
-  type AttestationLine,
-  type PackageWriter
-} from "./package-writer.js";
+import { createPackageWriter, type AttestationLine, type PackageWriter } from "./package-writer.js";
 import { SessionState } from "./state.js";
 import { SessionImpl } from "./session.js";
 import type {
@@ -24,11 +19,7 @@ import type {
   WitnessConfig,
   WitnessConfigSummary
 } from "./types.js";
-import {
-  connectWitness,
-  resolveWitnessConfig,
-  type WitnessClient
-} from "./witness-client.js";
+import { connectWitness, resolveWitnessConfig, type WitnessClient } from "./witness-client.js";
 
 export const CHECKPOINT_SCHEMA_VERSION = "sequesign.sdk.session_checkpoint.v0.1";
 
@@ -41,11 +32,7 @@ export function parseCheckpoint(serialized: string): SessionCheckpoint {
   try {
     parsed = JSON.parse(serialized);
   } catch (err) {
-    throw new ResumeError(
-      "checkpoint_unparsable",
-      "Checkpoint string is not valid JSON.",
-      err
-    );
+    throw new ResumeError("checkpoint_unparsable", "Checkpoint string is not valid JSON.", err);
   }
   return assertCheckpointShape(parsed);
 }
@@ -95,10 +82,7 @@ export function assertCheckpointShape(value: unknown): SessionCheckpoint {
 // never passes through assertCheckpointShape).
 export function normalizeCheckpointWitness(checkpoint: { witness?: unknown }): void {
   if (!checkpoint.witness || typeof checkpoint.witness !== "object") {
-    throw new ResumeError(
-      "checkpoint_malformed",
-      'Checkpoint field "witness" is not an object.'
-    );
+    throw new ResumeError("checkpoint_malformed", 'Checkpoint field "witness" is not an object.');
   }
   const witness = checkpoint.witness as Record<string, unknown>;
   if (typeof witness.baseUrl === "string" && witness.baseUrl.length > 0) {
@@ -134,6 +118,15 @@ export function buildSessionCheckpoint(args: BuildSessionCheckpointArgs): Sessio
     receiptId: state.receiptId,
     chainId: state.chainId,
     mode: state.mode,
+    // Embed-first packaging (Phase 3): persist the profile reference (which
+    // carries params_hash for a parameterized session) so resume can restore
+    // the mandate and finalize a valid v2.1.0 receipt. Previously dropped,
+    // which is why a parameterized session could not be resumed. Shallow-copy
+    // it (ProfileReference is a flat object of strings) so an app that edits
+    // the returned checkpoint's profile cannot alias and mutate the live
+    // session's profile_hash / params_hash, which would then diverge from the
+    // fixed genesis and fail final verification.
+    ...(state.profile ? { profile: { ...state.profile } } : {}),
     schemaReferences: schemaReferences.length > 0 ? schemaReferences : undefined,
     agent: {
       agentId: state.agentId,
@@ -196,10 +189,84 @@ export async function resumeSessionImpl(args: ResumeSessionImplArgs): Promise<Se
   }
   await writer.attachExisting();
 
+  // Embed-first packaging (Phase 3): restore a parameterized (V1-genesis)
+  // session's mandate. Because SEQUESIGN_GENESIS_V1 is domain-separated from
+  // V0, a parameterized chain's genesis can never equal computeGenesisV0, so a
+  // mismatch here means the session bound parameters. Restore the bound values
+  // from the package's params.json and re-verify the whole binding fail-closed
+  // (params.json -> params_hash -> V1 genesis -> initial_chain_state) before
+  // trusting them; without this the resumed session would finalize an
+  // unparameterized v2.0.0 receipt, silently dropping the committed mandate.
+  const isParameterized =
+    checkpoint.chain.initialChainState !== computeGenesisV0(checkpoint.chainId);
+  let restoredBoundParams: Record<string, unknown> | undefined;
+  let restoredProfile = checkpoint.profile;
+  if (isParameterized) {
+    if (!checkpoint.profile?.params_hash) {
+      throw new ResumeError(
+        "parameterized_resume_unsupported",
+        "Cannot resume a parameterized (genesis-bound) session: the checkpoint does not carry the bound profile/params_hash needed to restore the mandate. This checkpoint predates embed-first packaging; finalize without resuming, or start a new session."
+      );
+    }
+    const restoredParams = await writer.readParams();
+    if (!restoredParams) {
+      throw new ResumeError(
+        "parameterized_resume_missing_params",
+        `Cannot resume a parameterized session: params.json is missing from ${writer.directory}. The bound mandate cannot be restored.`
+      );
+    }
+    // paramsHash canonicalizes via JCS, which throws on a value it cannot
+    // represent (e.g. a lone surrogate in a string). Catch it and surface the
+    // documented typed ResumeError rather than letting a plain Error escape the
+    // resume contract — an unhashable params.json is just another form of a
+    // params_binding_mismatch.
+    let recomputedParamsHash: string;
+    try {
+      recomputedParamsHash = paramsHash(restoredParams);
+    } catch {
+      throw new ResumeError(
+        "params_binding_mismatch",
+        `Cannot resume: params.json in ${writer.directory} contains a value that cannot be canonicalized (JCS), so it cannot reproduce the committed profile.params_hash. The bound parameters are corrupt.`
+      );
+    }
+    if (recomputedParamsHash !== checkpoint.profile.params_hash) {
+      throw new ResumeError(
+        "params_binding_mismatch",
+        `Cannot resume: params.json hashes to ${recomputedParamsHash} but the checkpoint's profile.params_hash is ${checkpoint.profile.params_hash}. The bound parameters were altered after recording.`
+      );
+    }
+    const recomputedGenesis = computeGenesisV1({
+      chainId: checkpoint.chainId,
+      taskId: checkpoint.task.taskId,
+      delegatorId: checkpoint.task.delegatorId,
+      agentId: checkpoint.agent.agentId,
+      profileHash: checkpoint.profile.profile_hash,
+      paramsHash: recomputedParamsHash
+    });
+    if (recomputedGenesis !== checkpoint.chain.initialChainState) {
+      throw new ResumeError(
+        "genesis_binding_mismatch",
+        "Cannot resume: the restored profile/parameters do not reproduce the chain's initial_chain_state (SEQUESIGN_GENESIS_V1). The mandate or parties were altered."
+      );
+    }
+    restoredBoundParams = restoredParams;
+  } else if (restoredProfile?.params_hash) {
+    // V0 chain with a stray params_hash on the profile (only shape validation
+    // ran on the checkpoint, so a serialized/hand-edited object can reach here).
+    // That hash was never bound into the V0 genesis; strip it in memory —
+    // mirroring the V0 path in startSessionImpl — so resume + finalize emits a
+    // v2.0.0 receipt rather than a v2.1.0 envelope over a V0 chain (which the
+    // verifier would reject only after receipt.json is written). A stray
+    // params.json is removed later, after all on-disk validation succeeds, so a
+    // resume that throws never mutates the package (see below). This is a pure
+    // in-memory edit, safe to do before validation.
+    const { params_hash: _strippedParamsHash, ...withoutParamsHash } = restoredProfile;
+    restoredProfile = withoutParamsHash;
+  }
+
   const actionsOnDisk = await writer.readActions();
   const attestations = await writer.readAttestations();
-  const expectedActions =
-    checkpoint.chain.sequenceNext - checkpoint.chain.sequenceStart;
+  const expectedActions = checkpoint.chain.sequenceNext - checkpoint.chain.sequenceStart;
   if (actionsOnDisk.length !== expectedActions) {
     throw new ResumeError(
       "checkpoint_disk_mismatch",
@@ -215,6 +282,25 @@ export async function resumeSessionImpl(args: ResumeSessionImplArgs): Promise<Se
 
   const evidenceByActionId = await loadEvidenceByActionId(writer.directory, actionsOnDisk);
 
+  // Embed-first packaging (Phase 3): restore the embedded profile document so a
+  // resumed managed session re-writes profile.json into its package at finalize
+  // and offline conformance re-evaluation keeps working. Only meaningful for a
+  // profile_constrained session; undefined (falling back to the registry) when
+  // the package predates profile embedding.
+  const restoredProfileDocument =
+    checkpoint.mode === "profile_constrained"
+      ? ((await writer.readProfile()) ?? undefined)
+      : undefined;
+  // Template system Phase 5: restore the template-author signature sidecar so a
+  // resumed parameterized session re-writes profile.sig.json at finalize and the
+  // downloaded package keeps grading template_authenticity. Only meaningful on a
+  // parameterized (V1) profile_constrained session — the only shape the verifier
+  // grades — so it is restored only there and dropped as a stray otherwise below.
+  const restoredProfileAuthorSignature =
+    checkpoint.mode === "profile_constrained" && isParameterized
+      ? ((await writer.readProfileSig()) ?? undefined)
+      : undefined;
+
   const state = new SessionState({
     chainId: checkpoint.chainId,
     receiptId: checkpoint.receiptId,
@@ -227,7 +313,15 @@ export async function resumeSessionImpl(args: ResumeSessionImplArgs): Promise<Se
     mode: checkpoint.mode,
     initialChainState: checkpoint.chain.initialChainState,
     sequenceStart: checkpoint.chain.sequenceStart,
-    schemaReferences: checkpoint.schemaReferences
+    schemaReferences: checkpoint.schemaReferences,
+    // Restore the mandate so finalize re-emits v2.1.0 with the committed
+    // params_hash (and a profile_constrained session re-runs profile
+    // validation). Both were previously dropped on resume. On a V0 chain a
+    // stray params_hash has been stripped above.
+    profile: restoredProfile,
+    boundParams: restoredBoundParams,
+    profileDocument: restoredProfileDocument,
+    profileAuthorSignature: restoredProfileAuthorSignature
   });
   // Restore the witness-vouched registered identity so finalize stamps it even
   // if the resumed session records no further action.
@@ -304,6 +398,29 @@ export async function resumeSessionImpl(args: ResumeSessionImplArgs): Promise<Se
     );
   }
 
+  // V0 resume only: every on-disk check above has now passed, so it is safe to
+  // remove a stray params.json (a file that must not appear on an
+  // unparameterized receipt; left behind it would fail the finalized package
+  // with params_present_on_unparameterized_receipt). Deferred to here — after
+  // all validation — so a resume that throws for a wrong/stale/corrupt package
+  // never irreversibly mutates it. No-op when absent.
+  if (!isParameterized) {
+    await writer.deleteParams();
+  }
+  // A profile.json only belongs on a profile_constrained receipt; drop a stray
+  // one on any other mode (mirrors the params cleanup above). No-op when absent.
+  if (checkpoint.mode !== "profile_constrained") {
+    await writer.deleteProfile();
+  }
+  // A profile.sig.json belongs only on a parameterized (V1) profile_constrained
+  // receipt — the only shape whose embedded profile is genesis-authenticated and
+  // whose authenticity the verifier grades. Drop a stray one on any other shape
+  // (a V0 or non-profile_constrained resume), mirroring the params/profile
+  // cleanup above. No-op when absent.
+  if (!isParameterized || checkpoint.mode !== "profile_constrained") {
+    await writer.deleteProfileSig();
+  }
+
   const witnessConfig = resolveWitnessConfig(
     {
       ...options.witness,
@@ -369,11 +486,7 @@ async function loadEvidenceByActionId(
       const blob = await readJson<EvidenceBlob>(filePath);
       map.set(action.action_id, blob);
     } catch (err) {
-      const fallback = path.join(
-        packageDirectory,
-        "evidence",
-        `${action.action_id}.json`
-      );
+      const fallback = path.join(packageDirectory, "evidence", `${action.action_id}.json`);
       try {
         const blob = await readJson<EvidenceBlob>(fallback);
         map.set(action.action_id, blob);
@@ -515,7 +628,9 @@ function validateAttestation(
     actionRecordHash: attestation.agent.action_record_hash,
     chainState: attestation.agent.chain_state
   });
-  if (!verifyEd25519(attestation.agent.agent_public_key, agentMessage, attestation.agent.signature)) {
+  if (
+    !verifyEd25519(attestation.agent.agent_public_key, agentMessage, attestation.agent.signature)
+  ) {
     throw new ResumeError(
       "agent_signature_invalid",
       `Agent signature for action ${action.action_id} (sequence ${attestation.sequence}) did not verify against the recorded public key.`
@@ -574,4 +689,3 @@ function validateAttestation(
     );
   }
 }
-

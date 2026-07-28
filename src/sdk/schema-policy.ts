@@ -27,11 +27,7 @@
 import { loadSchemaById } from "../lib/schema-registry.js";
 import { validateEvidenceSchema } from "../lib/schema-validation.js";
 import type { EvidenceBlob } from "../lib/types.js";
-import {
-  SchemaHashMismatchError,
-  SchemaRequiredError,
-  SchemaValidationError
-} from "./errors.js";
+import { SchemaHashMismatchError, SchemaRequiredError, SchemaValidationError } from "./errors.js";
 import type { SessionState } from "./state.js";
 import type { RecordActionInput } from "./types.js";
 
@@ -47,11 +43,7 @@ export async function applySchemaPolicy(
     if (input.schemaId && input.schemaHash) {
       const loaded = await loadSchemaById(input.schemaId);
       if (loaded && loaded.schemaHash !== input.schemaHash) {
-        throw new SchemaHashMismatchError(
-          input.schemaId,
-          input.schemaHash,
-          loaded.schemaHash
-        );
+        throw new SchemaHashMismatchError(input.schemaId, input.schemaHash, loaded.schemaHash);
       }
       state.addSchemaReference({
         schema_id: input.schemaId,
@@ -66,11 +58,7 @@ export async function applySchemaPolicy(
   }
   const loaded = await loadSchemaById(input.schemaId);
   if (loaded && loaded.schemaHash !== input.schemaHash) {
-    throw new SchemaHashMismatchError(
-      input.schemaId,
-      input.schemaHash,
-      loaded.schemaHash
-    );
+    throw new SchemaHashMismatchError(input.schemaId, input.schemaHash, loaded.schemaHash);
   }
   const result = await validateEvidenceSchema(evidenceBlob);
   if (!result.valid) {

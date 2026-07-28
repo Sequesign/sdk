@@ -1,10 +1,4 @@
-import type {
-  EnvelopeCustody,
-  EvidenceCustody,
-  SdkConfig,
-  SdkMode,
-  SdkTier
-} from "./types.js";
+import type { EnvelopeCustody, EvidenceCustody, SdkConfig, SdkMode, SdkTier } from "./types.js";
 
 // Internal, fully-resolved SDK configuration. Either a Direct or a
 // Managed shape; the discriminant is `mode`. Built by
@@ -116,8 +110,7 @@ export function resolveSdkConfig(input: SdkConfig | undefined): ResolvedSdkConfi
       'mode is "managed" but no broker config was supplied. Pass broker: { baseUrl, apiKey } pointing at the Sequesign broker (https://broker.sequesign.com).'
     );
   }
-  const hasRawCustody =
-    cfg.evidenceCustody !== undefined || cfg.envelopeCustody !== undefined;
+  const hasRawCustody = cfg.evidenceCustody !== undefined || cfg.envelopeCustody !== undefined;
   if (cfg.tier === undefined && !hasRawCustody) {
     throw new SdkConfigError(
       "tier_required_for_managed_mode",

@@ -1,5 +1,6 @@
 import {
   createHash,
+  createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
   sign as cryptoSign,
@@ -74,6 +75,20 @@ export function canonicalizeEd25519PublicKeyPem(pem: string): string {
 // attestation be dropped rather than aborting the whole verification.
 export function isEd25519PublicKeyPem(pem: string): boolean {
   return parseEd25519PublicKeyPem(pem).ok;
+}
+
+// True only for a well-formed Ed25519 PRIVATE-key PEM. signEd25519 calls
+// crypto.sign(null, ...), which also accepts other EdDSA private keys (e.g.
+// Ed448) and produces a signature of the wrong length (114 bytes vs the
+// 64-byte Ed25519 signature this format requires). A signer built on this
+// must gate the key here so it fails loud at signing time rather than
+// emitting an artifact every verifier rejects as malformed.
+export function isEd25519PrivateKeyPem(pem: string): boolean {
+  try {
+    return createPrivateKey(pem).asymmetricKeyType === "ed25519";
+  } catch {
+    return false;
+  }
 }
 export function signEd25519(privateKeyPem: string, message: Buffer): string {
   return cryptoSign(null, message, privateKeyPem).toString("base64");

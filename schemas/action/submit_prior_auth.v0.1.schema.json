@@ -1,0 +1,23 @@
+{
+  "schema_id": "sequesign.submit_prior_auth.v0.1",
+  "type": "object",
+  "required": ["patient_ref", "payer", "service_codes", "clinical_justification_ref"],
+  "properties": {
+    "patient_ref": {
+      "type": "string"
+    },
+    "payer": {
+      "type": "string"
+    },
+    "service_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "clinical_justification_ref": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

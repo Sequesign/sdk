@@ -7,18 +7,17 @@
 //
 // See Issue #85 for the consolidation rationale.
 
-import {
-  assembleAgentActionReceipt,
-  type AssembledAction
-} from "../lib/envelope.js";
+import { assembleAgentActionReceipt, type AssembledAction } from "../lib/envelope.js";
 import { agentIdentityAttestationFor } from "../lib/agent-identity.js";
 import { agentKeyFingerprint } from "../lib/hash.js";
-import type { AgentActionReceipt } from "../lib/types.js";
+import type { AgentActionReceipt, ReceiptConformance } from "../lib/types.js";
 import type { SessionState } from "./state.js";
 
 export interface BuildEnvelopeArgs {
   state: SessionState;
   finalChainState: string;
+  // Phase 4: sealed only for a nonconformant profile_constrained receipt.
+  conformance?: ReceiptConformance;
 }
 
 export function buildReceiptEnvelope(args: BuildEnvelopeArgs): AgentActionReceipt {
@@ -68,6 +67,7 @@ export function buildReceiptEnvelope(args: BuildEnvelopeArgs): AgentActionReceip
     counterpartyAttestations: state.counterpartyAttestations(),
     profile: state.profile,
     schemaReferences: state.schemaReferences(),
-    agentIdentityAttestation
+    agentIdentityAttestation,
+    conformance: args.conformance
   });
 }

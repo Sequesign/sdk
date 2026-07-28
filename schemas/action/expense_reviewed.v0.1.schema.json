@@ -1,0 +1,25 @@
+{
+  "schema_id": "sequesign.expense_reviewed.v0.1",
+  "type": "object",
+  "required": ["expense_report_ref", "amount", "currency", "per_diem_policy_ref", "decision"],
+  "properties": {
+    "expense_report_ref": {
+      "type": "string"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0
+    },
+    "currency": {
+      "type": "string"
+    },
+    "per_diem_policy_ref": {
+      "type": "string"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approve", "reject", "needs_info"]
+    }
+  },
+  "additionalProperties": false
+}

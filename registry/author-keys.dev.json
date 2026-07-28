@@ -1,0 +1,10 @@
+{
+  "schema_version": "sequesign.key_discovery.v0.1",
+  "keys": [
+    {
+      "author_id": "sequesign.templates.dev",
+      "key_type": "author",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAkjM/fW0kMQ+cjPOfO6J1mfLibsyoxnGuovCVxIw9hxQ=\n-----END PUBLIC KEY-----\n"
+    }
+  ]
+}

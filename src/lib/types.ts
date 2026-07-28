@@ -224,6 +224,95 @@ export type ProfileReference = {
   profile_hash: string;
   profile_path?: string;
   registry_url?: string;
+  // Reserved, forward-looking field for parameterized profiles: "sha256:"
+  // over the JCS-canonical bound parameters (see mandate-params.paramsHash).
+  // NOT emitted in the receipt envelope in Phase 1 — it is dormant until
+  // Phase 2 (genesis binding), which commits it into the chain genesis
+  // alongside profile_hash, emits it on the wire, and bumps the receipt
+  // schema version in the same change. The bound params will then travel in
+  // the package (params.json) so an offline verifier re-resolves and
+  // re-evaluates without a registry. Absent for unparameterized profiles.
+  params_hash?: string;
+};
+
+// Template-author signature sidecar (template system Phase 5). The JSON wrapper
+// stored as profile.sig.json alongside profile.json: base64url of a COSE Sign1
+// (RFC 9052, EdDSA, detached payload) by which a template author vouches for the
+// profile document. The signature covers canonicalize(profileDoc) — the same
+// bytes as profile_hash — so it is transitively bound to a V1 receipt through
+// the genesis. The author_id is carried in the COSE protected header (kid); this
+// wrapper deliberately holds NO parsed author_id, so a verifier reads identity
+// only from the signed bytes. See author-attestation.ts.
+export type ProfileSignatureSidecar = {
+  cose_sign1_b64url: string;
+};
+
+// How a verifier grades WHO vouches for the mandate rules, distinct from whether
+// the rules are intact (profile_hash_verified) — an orthogonal badge, not a
+// verification_level rung, the same relationship identity_assurance has to the
+// level ladder.
+//   attested     — a valid author COSE Sign1 over the profile, by an author key
+//                  in the verifier's trusted author-keys anchor.
+//   unrecognized — a signature is present but its author_id is not one the
+//                  verifier recognizes (no key to check it against): a claim, not
+//                  a vouch. No trust is conferred.
+//   unattested   — no author signature (the mandate content is still hash-bound;
+//                  it is simply not author-vouched). Also the fail-safe outcome
+//                  when a present signature is malformed or does not verify (a
+//                  template_author_signature_invalid warning accompanies it).
+export type TemplateAuthenticity = "attested" | "unrecognized" | "unattested";
+
+// A parameterized-mandate profile document (the "template" product name;
+// "profile" remains the code concept, evolved in place — see
+// SPEC AMENDMENT 01, Decision 1). This types the shape validateWorkflowProfile
+// currently reads as `any`; the state-machine fields (allowed_transitions,
+// conditional_requirements, required_attestations) are kept as-is. New in
+// the template system: `parameters` and `evidence_schemas`.
+export type WorkflowProfile = {
+  profile_id: string;
+  description?: string;
+  receipt_mode?: ReceiptMode;
+  // Optional parameter declarations. A session binds concrete values,
+  // validated and hashed at start (mandate-params.bindParameters).
+  parameters?: import("./mandate-params.js").ParameterDeclarations;
+  allowed_actions: string[];
+  required_actions?: string[];
+  allowed_transitions?: Array<[string, string]>;
+  conditional_requirements?: Array<{
+    if_action: string;
+    field_path: string;
+    equals: unknown;
+    required_prior_to: { action: string; must_include: string };
+  }>;
+  required_attestations?: Record<string, string[]>;
+  allowed_final_actions?: string[];
+  // Seal-time mandate terms evaluated against verify-context signals (the
+  // receipt's resolved identity assurance and the committed action timestamps),
+  // not just the profile+actions document. Both are conformance terms
+  // (violation-preserving), enforced via evaluateValidityTerm (in evaluateMandate) + evaluateIdentityTerm (in verify).
+  //   identity.min_assurance: the lowest agent-identity assurance the mandate
+  //     accepts ("self_asserted" < "registered").
+  //   validity.max_session_duration_s: cap on the span from the first to the last
+  //     action timestamp.
+  identity?: { min_assurance?: "self_asserted" | "registered" };
+  validity?: { max_session_duration_s?: number };
+  // Per-action-type parameterized JSON Schema for the action's evidence.
+  // `$param` / `$allowlist` markers are resolved against the bound
+  // parameters (mandate-params.resolveSchemaParams) BEFORE validation.
+  // Optional and additive: an action with no entry is unconstrained here
+  // (registry action schemas still apply where referenced).
+  evidence_schemas?: Record<string, unknown>;
+  // Cross-action evidence bindings: fields whose values must be identical
+  // across two action types in the chain, so a later action stays bound to the
+  // earlier one it depends on (e.g. an authorization must carry the SAME
+  // expense_report_ref + amount that was reviewed, not an arbitrary other
+  // report). This is a CHAIN relationship, not a single-action constraint, so
+  // evaluateMandate owns it — checkAction (a-priori, one action, no prior
+  // evidence) does not evaluate it, exactly as it skips required_actions /
+  // allowed_final_actions. Each `to_action` occurrence must match some earlier
+  // `from_action` occurrence on every listed field; a bound field absent on the
+  // to_action side fails closed.
+  evidence_bindings?: Array<{ from_action: string; to_action: string; fields: string[] }>;
 };
 // v1.0.0 is the publish-day receipt schema version: the shape the SDK
 // ships at v0.1.0 and the value every customer's stored receipts commit
@@ -242,7 +331,36 @@ export type ProfileReference = {
 // "v0.6" is the arc/work name, NOT a schema version; the wire value is
 // sequesign.receipt.v2.0.0. Pre-customer clean break: older receipts
 // are not supported by this verifier.
-export type ReceiptSchemaVersion = "sequesign.receipt.v2.0.0";
+// v2.1.0 (template system Phase 2): MINOR bump from v2.0.0. Additive — a
+// parameterized-profile receipt carries the optional `profile.params_hash`
+// and its chain genesis uses the SEQUESIGN_GENESIS_V1 construction (verifier
+// recomputes it). Unparameterized receipts are unchanged and still emit
+// v2.0.0, so the two coexist; the verifier accepts both.
+// v2.2.0 (template system Phase 4): MINOR bump from v2.1.0. Additive — a
+// profile_constrained receipt MAY carry an optional `conformance` block: the
+// producer's self-assessment of whether the sealed work obeyed the mandate
+// (workflow shape + parameterized evidence_schemas). It is descriptive, not
+// cryptographic: the verifier NEVER trusts it and always re-evaluates
+// conformance from the actions/evidence and the embedded profile.json +
+// params.json. Nonconformant work still seals (conformance.conformant:false)
+// and still verifies as authentic (valid:true). Receipts without the block
+// (any earlier version, or freeform) are unchanged; the verifier accepts all
+// three versions.
+export type ReceiptSchemaVersion =
+  | "sequesign.receipt.v2.0.0"
+  | "sequesign.receipt.v2.1.0"
+  | "sequesign.receipt.v2.2.0";
+
+// The producer's self-assessed mandate conformance, sealed into a
+// profile_constrained receipt (Phase 4). `conformant` is the verdict;
+// `violations` enumerates the specific breaches when false. Not covered by any
+// signature and never trusted by the verifier — it re-derives conformance
+// independently — so it serves as a human-readable record of what the producer
+// observed at seal time, not as evidence.
+export type ReceiptConformance = {
+  conformant: boolean;
+  violations: string[];
+};
 // Agent identity attestation (PR 15-A). Present on a receipt only when
 // it was produced under a registered API key (one the customer
 // committed an agent public key to at creation). registered_at is the
@@ -295,6 +413,11 @@ export type AgentActionReceipt = {
   evidence_references: EvidenceReference[];
   profile?: ProfileReference;
   schema_references?: SchemaReference[];
+  // Phase 4: the producer's self-assessed mandate conformance. Optional and
+  // additive (present only on v2.2.0 profile_constrained receipts, when the
+  // producer sealed nonconformant or conformant work knowingly). Descriptive
+  // only — the verifier recomputes conformance and never trusts this field.
+  conformance?: ReceiptConformance;
 };
 // A trusted witness key, as supplied to the verifier. Mirrors the entries
 // in the witness's /.well-known/sequesign/keys.json discovery document.
@@ -385,9 +508,13 @@ export type IdentityProof = {
 export type RegistrationRecord = {
   schema_version: "sequesign.registration_record.v1.0.0";
   issuer: "sequesign";
-  role: "approver" | "counterparty" | "agent";
+  // "author" (template system Phase 6 Track B): the platform's vouch that a
+  // template-author Ed25519 key belongs to a named author_id. Like approver /
+  // counterparty (and unlike agent) it carries a named `identity` (the
+  // author_id); it never carries a party_type.
+  role: "approver" | "counterparty" | "agent" | "author";
   // Present for the approver role (matches the approval's party_type); omitted
-  // for counterparty and agent.
+  // for counterparty, agent, and author.
   party_type?: "human" | "agent";
   // sha256: fingerprint of the enrolled attestation key (the approver_public_key
   // / counterparty_public_key that signs the A/C, or the agent_public_key that
@@ -484,6 +611,36 @@ export type VerificationReport = {
   expected_evidence_hash?: string;
   computed_evidence_hash?: string;
   profile?: { profile_id: string; profile_hash_verified: boolean };
+  // Mandate conformance (Phase 4), re-evaluated independently by the verifier —
+  // never read from the receipt's self-assessed `conformance` block.
+  // `conformant` is the axis distinct from `valid`: `valid` is authenticity +
+  // integrity (a nonconformant receipt is still valid:true), `conformant` is
+  // whether the sealed work obeyed the mandate. null when not applicable
+  // (freeform, or a hard failure that stopped evaluation). `violations` lists
+  // the specific breaches. `profile_resolved_from` records whether the mandate
+  // was re-resolved from the embedded profile.json ("embedded", fully offline)
+  // or the bundled registry ("registry", back-compat). Optional because early
+  // failure paths return before conformance is computed.
+  conformant?: boolean | null;
+  conformance?: {
+    conformant: boolean;
+    violations: string[];
+    profile_resolved_from: "embedded" | "registry";
+  };
+  // Template authenticity (Phase 5): WHO vouches for the mandate rules, an axis
+  // distinct from whether the rules are intact (profile.profile_hash_verified)
+  // and from conformance. Populated only for a profile_constrained receipt whose
+  // embedded profile.json is genesis-authenticated (a V1/parameterized receipt);
+  // "unattested" otherwise (including non-parameterized profiles, whose embedded
+  // document is not authenticated, so an author signature over it is not
+  // evaluated). See TemplateAuthenticity. `template_author` carries the vouching
+  // author's identity only when `template_authenticity` is "attested". Optional
+  // because early failure paths and freeform receipts return before it is set.
+  template_authenticity?: TemplateAuthenticity;
+  template_author?: {
+    author_id: string;
+    author_key_fingerprint: string;
+  };
   flags: {
     hash_integrity: boolean;
     sequence_integrity: boolean;

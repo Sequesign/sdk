@@ -6,6 +6,7 @@ import type {
   EvidenceReference,
   ApprovalAttestation,
   ProfileReference,
+  ProfileSignatureSidecar,
   ReceiptMode,
   SchemaReference,
   WitnessAttestation
@@ -27,6 +28,22 @@ export interface SessionStateInit {
   sequenceStart: number;
   schemaReferences?: SchemaReference[];
   profile?: ProfileReference;
+  // Embed-first packaging (template system Phase 3): the concrete parameter
+  // values bound to a parameterized profile at session start. Kept so they
+  // travel in the package (params.json) and can be restored on resume; the
+  // params_hash committed into the V1 genesis is paramsHash(boundParams).
+  // Undefined for unparameterized (V0) sessions.
+  boundParams?: Record<string, unknown>;
+  // Embed-first packaging (Phase 3): the resolved workflow profile document
+  // for a profile_constrained session. Kept so it travels in the package
+  // (profile.json) and the managed path can write it into its package at
+  // finalize. Undefined for freeform sessions.
+  profileDocument?: Record<string, unknown>;
+  // Template system Phase 5: the template-author signature sidecar for the
+  // resolved (parameterized) profile. Kept so it travels in the package
+  // (profile.sig.json) and the managed path can write/forward it at finalize.
+  // Undefined for unsigned profiles and V0 sessions.
+  profileAuthorSignature?: ProfileSignatureSidecar;
   // §3.1 Retention PR 1: session-level extend-only retention override.
   // ManagedSession reads this on every postReceipt / postFinalize so
   // the broker stamps a single retention_until on the single
@@ -47,6 +64,9 @@ export class SessionState {
   readonly initialChainState: string;
   readonly sequenceStart: number;
   readonly profile?: ProfileReference;
+  readonly boundParams?: Record<string, unknown>;
+  readonly profileDocument?: Record<string, unknown>;
+  readonly profileAuthorSignature?: ProfileSignatureSidecar;
   readonly retention?: RetentionInput;
 
   private _sequenceNext: number;
@@ -78,6 +98,9 @@ export class SessionState {
     this._sequenceNext = init.sequenceStart;
     this._currentChainState = init.initialChainState;
     this.profile = init.profile;
+    this.boundParams = init.boundParams;
+    this.profileDocument = init.profileDocument;
+    this.profileAuthorSignature = init.profileAuthorSignature;
     this.retention = init.retention;
     for (const ref of init.schemaReferences ?? []) {
       this.addSchemaReference(ref);

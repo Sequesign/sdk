@@ -58,8 +58,7 @@ export function registryPath(...parts: string[]): string {
   // undefined) and the var is never set, so the default branch runs and
   // PROJECT_ROOT="" yields the "registry/..." prefix the verifier shim
   // expects.
-  const override =
-    typeof process !== "undefined" ? process.env.SEQUESIGN_REGISTRY_DIR : undefined;
+  const override = typeof process !== "undefined" ? process.env.SEQUESIGN_REGISTRY_DIR : undefined;
   if (override && override.length > 0) {
     return path.join(override, ...parts);
   }

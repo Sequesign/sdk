@@ -15,11 +15,7 @@ import type {
   SatelliteWitnessAttestation,
   WitnessAttestation
 } from "../lib/types.js";
-import type {
-  EnvelopeCustody,
-  EvidenceCustody,
-  IntermediaryConfig
-} from "./types.js";
+import type { EnvelopeCustody, EvidenceCustody, IntermediaryConfig } from "./types.js";
 
 export const DEFAULT_INTERMEDIARY_TIMEOUT_MS = 15_000;
 
@@ -30,9 +26,7 @@ export interface ResolvedIntermediaryConfig {
   fetchImpl: typeof fetch;
 }
 
-export function resolveIntermediaryConfig(
-  cfg: IntermediaryConfig
-): ResolvedIntermediaryConfig {
+export function resolveIntermediaryConfig(cfg: IntermediaryConfig): ResolvedIntermediaryConfig {
   return {
     baseUrl: cfg.baseUrl.replace(/\/+$/, ""),
     apiKey: cfg.apiKey,
@@ -81,6 +75,11 @@ export interface PostReceiptInput {
   // ManagedSession sets this on every recordAction to keep the
   // multi-action and one-shot paths uniform.
   deferEnvelopeStorage?: boolean;
+  // The schema version the finalized receipt will carry. The witness records
+  // it in its transparency-log entry, so a parameterized (V1 genesis) chain
+  // forwards v2.1.0. Omitted (undefined) on the unparameterized path, where the
+  // broker defaults to v2.0.0.
+  receiptSchemaVersion?: "sequesign.receipt.v2.0.0" | "sequesign.receipt.v2.1.0";
   // §3.2 PR 1: optional ActionRecord.metadata. The SDK signs the
   // assembled action record (with metadata) locally; this field
   // transmits the same metadata so broker's server-side rebuild
@@ -108,9 +107,7 @@ export interface PostReceiptInput {
 // §3.1 Retention PR 1: wire shape for the optional retention override
 // on /v1/receipt and /v1/receipts/finalize. Mirrors the broker's
 // RetentionOverrideSchema.
-export type RetentionInput =
-  | { until: string }
-  | { duration: string };
+export type RetentionInput = { until: string } | { duration: string };
 
 export interface PostReceiptResult {
   receiptId: string;
@@ -144,6 +141,11 @@ export interface PostFinalizeInput {
   // stamps retention at finalize the same way the single-action path
   // stamps it at /v1/receipt.
   retention?: RetentionInput;
+  // Embed-first packaging (Phase 3): the bound parameter values for a
+  // parameterized (v2.1.0) receipt. The broker validates they hash to the
+  // receipt's profile.params_hash and stores them as params.json in the hosted
+  // package. Omitted for unparameterized receipts.
+  boundParams?: Record<string, unknown>;
 }
 
 export interface PostFinalizeResult {
@@ -192,9 +194,7 @@ export class IntermediaryRequestError extends Error {
   }
 }
 
-export function createIntermediaryClient(
-  cfg: IntermediaryConfig
-): IntermediaryClient {
+export function createIntermediaryClient(cfg: IntermediaryConfig): IntermediaryClient {
   const resolved = resolveIntermediaryConfig(cfg);
 
   async function postReceipt(input: PostReceiptInput): Promise<PostReceiptResult> {
@@ -219,8 +219,9 @@ export function createIntermediaryClient(
     if (input.sequence !== undefined) body.sequence = input.sequence;
     if (input.previousChainState !== undefined)
       body.previous_chain_state = input.previousChainState;
-    if (input.deferEnvelopeStorage)
-      body.defer_envelope_storage = input.deferEnvelopeStorage;
+    if (input.deferEnvelopeStorage) body.defer_envelope_storage = input.deferEnvelopeStorage;
+    if (input.receiptSchemaVersion !== undefined)
+      body.receipt_schema_version = input.receiptSchemaVersion;
     if (input.metadata !== undefined) body.metadata = input.metadata;
     if (input.schemaId !== undefined) body.schema_id = input.schemaId;
     if (input.schemaHash !== undefined) body.schema_hash = input.schemaHash;
@@ -272,6 +273,7 @@ export function createIntermediaryClient(
     };
     if (input.evidenceBlobs) body.evidence_blobs = input.evidenceBlobs;
     if (input.retention !== undefined) body.retention = input.retention;
+    if (input.boundParams !== undefined) body.bound_params = input.boundParams;
 
     const response = await fetchWithTimeout(
       `${resolved.baseUrl}/v1/receipts/finalize`,
@@ -313,9 +315,7 @@ export function createIntermediaryClient(
     };
   }
 
-  async function postSatellite(
-    input: PostSatelliteInput
-  ): Promise<SatelliteWitnessAttestation> {
+  async function postSatellite(input: PostSatelliteInput): Promise<SatelliteWitnessAttestation> {
     const response = await fetchWithTimeout(
       `${resolved.baseUrl}/v1/satellites`,
       {

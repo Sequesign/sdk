@@ -4,7 +4,7 @@ import { agentKeyFingerprint, ed25519KeyFingerprint, hashCanonical } from "./has
 import { extendChain } from "./chain.js";
 import { readJson, readJsonl, listJsonFiles, writeJson } from "./io.js";
 import { validateEvidenceSchema } from "./schema-validation.js";
-import { validateWorkflowProfile } from "./profile.js";
+import { evaluateMandate, evaluateIdentityTerm } from "./profile.js";
 import type {
   AgentActionReceipt,
   ActionRecord,
@@ -18,7 +18,9 @@ import type {
   InclusionProofsSource,
   InclusionProofsVerifiedState,
   LegState,
+  ProfileSignatureSidecar,
   SatelliteWitnessAttestation,
+  TemplateAuthenticity,
   VerificationReport,
   WitnessKey
 } from "./types.js";
@@ -30,6 +32,10 @@ import {
   satelliteWitnessMessage
 } from "./messages.js";
 import { isEd25519PublicKeyPem, keyIdFromPublicKeyPem, verifyEd25519 } from "./keys.js";
+import { PROFILE_SIG_FILE } from "./package-layout.js";
+import { decodeAuthorAttestation, verifyAuthorSignature } from "./author-attestation.js";
+import { computeGenesisV0, computeGenesisV1 } from "./genesis.js";
+import { paramsHash } from "./mandate-params.js";
 import { identityProofVouches, agentIdentityProofRecord } from "./registration.js";
 import { batchSigningMessage, hexToBytes, verifyAuditPath } from "./merkle.js";
 
@@ -223,6 +229,78 @@ export function parseTrustedRegistrationKeys(raw: string | undefined | null): Wi
   return keys;
 }
 
+// Template system Phase 5: a trusted template-author key, resolved by author_id
+// (the COSE `kid`). Unlike witness/registration keys — which are trusted by key
+// fingerprint — an author signature names its author in the signed protected
+// header, and the verifier looks the key up by that name. author_id is the
+// stable identity a consumer decides to trust ("Acme Compliance's templates");
+// the key behind it can rotate in the anchor without changing the grade a
+// consumer sees.
+export type AuthorKey = { author_id: string; public_key: string };
+
+// Parse the template-author key-discovery document
+// (dashboard-api's /.well-known/sequesign/author-keys.json) or a bare array of
+// { author_id, public_key } into AuthorKey[]. Same shape/discipline as
+// parseTrustedWitnessKeys, but keyed on author_id and filtered to key_type
+// "author" in a document. An empty/unset input returns [] (author vouching is
+// optional — no anchor configured means every present signature grades at most
+// "unrecognized"). A non-empty but malformed value, a document/array with no
+// author keys, OR any entry whose public_key is not a valid Ed25519 PEM THROWS
+// so a wrong or misconfigured endpoint fails loud rather than silently degrading
+// every template to unattested. (Validating the PEM here, as loadConfiguredAuthorKeys
+// does for the publish side, is what keeps a bad AUTHOR_TRUSTED_KEYS from booting
+// a service that then grades every signature "unrecognized" with no error — the
+// best-effort fetched-anchor callers wrap this in try/catch and degrade to [].)
+export function parseTrustedAuthorKeys(raw: string | undefined | null): AuthorKey[] {
+  if (!raw || raw.trim().length === 0) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `author trusted keys: not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const fromDocument = !Array.isArray(parsed);
+  const entries: unknown[] = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { keys?: unknown }).keys)
+      ? (parsed as { keys: unknown[] }).keys
+      : [];
+  if (entries.length === 0) {
+    throw new Error(
+      "author trusted keys: parsed but contained no keys. Provide the author well-known document or an array of { author_id, public_key }."
+    );
+  }
+  const keys = entries
+    .filter((e) => {
+      const keyType = (e as { key_type?: unknown }).key_type;
+      return fromDocument ? keyType === "author" : keyType === undefined || keyType === "author";
+    })
+    .map((e, i) => {
+      const obj = e as { author_id?: unknown; public_key?: unknown };
+      if (typeof obj.author_id !== "string" || typeof obj.public_key !== "string") {
+        throw new Error(
+          `author trusted keys: entry ${i} must have string author_id and public_key fields.`
+        );
+      }
+      if (!isEd25519PublicKeyPem(obj.public_key)) {
+        throw new Error(
+          `author trusted keys: entry ${i} (author_id "${obj.author_id}") is not a valid Ed25519 public key PEM.`
+        );
+      }
+      return { author_id: obj.author_id, public_key: obj.public_key };
+    });
+  if (keys.length === 0) {
+    throw new Error(
+      fromDocument
+        ? 'author trusted keys: discovery document has no author keys (key_type "author").'
+        : "author trusted keys: contained no usable keys."
+    );
+  }
+  return keys;
+}
+
 export type CompletenessQueryResult = {
   log_id: string;
   chain_id: string;
@@ -281,6 +359,14 @@ export type VerifyReceiptPackageOptions = {
   // not evaluated and every present leg stays at most `present_unverified` (the
   // current behavior). Never required; a missing anchor never fails a receipt.
   trustedRegistrationKeys?: WitnessKey[];
+  // Template system Phase 5. The template-author keys the caller trusts (from the
+  // platform's well-known author-keys endpoint, or a pinned list). A
+  // profile_constrained receipt whose authenticated (V1) profile.json carries a
+  // COSE Sign1 author signature by one of these keys grades
+  // template_authenticity "attested". Omitted/empty: author vouching is not
+  // evaluated and a present signature grades at most "unrecognized" (never
+  // required; a missing anchor never fails a receipt).
+  trustedAuthorKeys?: AuthorKey[];
   envelopePath?: string;
   completeness?: CompletenessChecker;
   // Optional fetcher for inclusion proofs at verification time. The
@@ -307,10 +393,14 @@ export async function verifyReceiptPackage(
   // transition window. This runs before the trust-anchor gate: an
   // unsupported schema is rejected on its own terms, not masked as a
   // missing trust anchor.
-  if (receipt.schema_version !== "sequesign.receipt.v2.0.0") {
+  if (
+    receipt.schema_version !== "sequesign.receipt.v2.0.0" &&
+    receipt.schema_version !== "sequesign.receipt.v2.1.0" &&
+    receipt.schema_version !== "sequesign.receipt.v2.2.0"
+  ) {
     return fail({
       receipt_mode: receipt.receipt_mode,
-      reason: `unsupported_schema_version: "${receipt.schema_version}". This verifier accepts only "sequesign.receipt.v2.0.0". Earlier receipts (v1.0.0 and v0.x) are not supported.`
+      reason: `unsupported_schema_version: "${receipt.schema_version}". This verifier accepts "sequesign.receipt.v2.0.0", "sequesign.receipt.v2.1.0", and "sequesign.receipt.v2.2.0". Earlier receipts (v1.0.0 and v0.x) are not supported.`
     });
   }
   // Trust-anchor setup. Recompute each trusted key's fingerprint from its
@@ -340,6 +430,25 @@ export async function verifyReceiptPackage(
       // A malformed platform PEM contributes no fingerprint (no vouch).
     }
   }
+  // Template system Phase 5: resolve author_id -> the set of trusted author
+  // public PEMs. An author may publish MORE THAN ONE key under a stable
+  // author_id: during a key rotation the anchor carries both the old and the new
+  // key for an overlap window, so historical receipts (whose stored sidecar was
+  // signed by the old key) keep grading "attested" alongside freshly-signed ones.
+  // The grading below tries every candidate for the named author and attests on
+  // the first that verifies. A malformed or non-Ed25519 PEM is dropped (never a
+  // candidate), and an exact duplicate (same author_id + same PEM) collapses, so
+  // the trust set is deterministic regardless of anchor ordering.
+  const trustedAuthorKeys = new Map<string, string[]>();
+  for (const key of options.trustedAuthorKeys ?? []) {
+    if (!isEd25519PublicKeyPem(key.public_key)) continue;
+    const existing = trustedAuthorKeys.get(key.author_id);
+    if (existing) {
+      if (!existing.includes(key.public_key)) existing.push(key.public_key);
+    } else {
+      trustedAuthorKeys.set(key.author_id, [key.public_key]);
+    }
+  }
   // The trust anchor is only needed to verify witness signatures. A
   // receipt with no witness attestations can never be witnessed, so it
   // verifies to an integrity-only result with mode "none" and needs no
@@ -364,6 +473,152 @@ export async function verifyReceiptPackage(
     const item = await readJson<EvidenceBlob>(file);
     evidence.push(item);
     evidenceByActionId.set(item.action_id, item);
+  }
+  // Enforce the wire contract's version ↔ shape relationship before any chain
+  // work. The chain genesis is V1 ⇔ profile.params_hash is present (independent
+  // of Phase 4). The schema_version is a pure function of the receipt shape: a
+  // sealed conformance block ⇔ v2.2.0; else params_hash ⇔ v2.1.0 ⇔ V1 genesis;
+  // else v2.0.0. Rejecting a mismatch stops a downgraded/mislabeled envelope
+  // from slipping past the genesis recompute below (which is keyed on
+  // params_hash, not on the version label). The presence of the conformance
+  // block gates the version only — the verifier still recomputes the
+  // conformance verdict independently and never trusts the sealed block.
+  // A present conformance block must match the ReceiptConformance shape exactly
+  // ({conformant:boolean, violations:string[]}). A truthy-but-malformed value
+  // must not silently select v2.2.0 and leave a type-violating field for
+  // downstream consumers; reject it here (the verifier still recomputes the
+  // verdict, but the sealed block must be well-formed to be present).
+  const rawConformance = (receipt as { conformance?: unknown }).conformance;
+  if (rawConformance !== undefined && !isValidConformanceBlock(rawConformance)) {
+    return fail({
+      receipt_mode: receipt.receipt_mode,
+      reason:
+        "conformance_block_malformed: the receipt's conformance block must be exactly {conformant:false, violations:[>=1 strings]} — it records a nonconformance"
+    });
+  }
+  // A block records a mandate nonconformance, which only exists for a
+  // profile_constrained receipt. Reject it on any other mode.
+  if (rawConformance !== undefined && receipt.receipt_mode !== "profile_constrained") {
+    return fail({
+      receipt_mode: receipt.receipt_mode,
+      reason:
+        "conformance_on_unconstrained_receipt: a conformance block is only valid on a profile_constrained receipt"
+    });
+  }
+  const hasConformance = Boolean(rawConformance);
+  const hasParamsHash = Boolean(receipt.profile?.params_hash);
+  const expectedVersion = hasConformance
+    ? "sequesign.receipt.v2.2.0"
+    : hasParamsHash
+      ? "sequesign.receipt.v2.1.0"
+      : "sequesign.receipt.v2.0.0";
+  if (receipt.schema_version !== expectedVersion) {
+    return fail({
+      receipt_mode: receipt.receipt_mode,
+      reason: `version_params_mismatch: schema_version "${receipt.schema_version}" is inconsistent with the receipt shape (expected "${expectedVersion}"): conformance block ⇔ v2.2.0, else params_hash ⇔ v2.1.0 ⇔ SEQUESIGN_GENESIS_V1, else v2.0.0`
+    });
+  }
+
+  // Genesis binding (template system Phase 2). A parameterized receipt
+  // (profile.params_hash present) commits the mandate + parties into the chain
+  // genesis via SEQUESIGN_GENESIS_V1. Recompute it from the receipt's own
+  // fields and reject a mismatch: this is what makes a swapped mandate or
+  // tampered parameters break verification rather than pass silently. It
+  // folds into hash_integrity — the genesis is the root the chain hangs from.
+  // Unparameterized receipts keep the legacy seed and are not recomputed.
+  if (receipt.profile?.params_hash) {
+    // params_hash must be the canonical "sha256:" + 64 lowercase hex digest.
+    // The verifier hashes the receipt's own params_hash into the V1 genesis, so
+    // without a format check an authenticated sealer could commit an arbitrary
+    // token (e.g. "x") that self-consistently matches initial_chain_state even
+    // though no bound parameter object could produce it. Reject the malformed
+    // value before it is trusted as a genesis input.
+    if (!/^sha256:[0-9a-f]{64}$/.test(receipt.profile.params_hash)) {
+      return fail({
+        receipt_mode: receipt.receipt_mode,
+        reason:
+          "params_hash_malformed: profile.params_hash must be 'sha256:' followed by 64 lowercase hex characters"
+      });
+    }
+    const expectedGenesis = computeGenesisV1({
+      chainId: receipt.chain.chain_id,
+      taskId: receipt.task.task_id,
+      delegatorId: receipt.task.delegator_id,
+      agentId: receipt.agent_id,
+      profileHash: receipt.profile.profile_hash,
+      paramsHash: receipt.profile.params_hash
+    });
+    if (expectedGenesis !== receipt.chain.initial_chain_state) {
+      return fail({
+        receipt_mode: receipt.receipt_mode,
+        reason:
+          "genesis_binding_mismatch: recomputed SEQUESIGN_GENESIS_V1 does not match chain.initial_chain_state (mandate, parameters, or parties were altered)",
+        flags: { ...baseFlags(), sequence_integrity: true }
+      });
+    }
+    // Embed-first packaging (Phase 3): when the package carries a params.json,
+    // re-hash the embedded bound values and confirm they reproduce the
+    // committed profile.params_hash. The genesis recompute above already binds
+    // that hash into the chain; this additionally proves the human-readable
+    // params.json IS the committed mandate rather than a substituted or edited
+    // copy. params.json is optional for backward compatibility — a v2.1.0
+    // package produced before embedding simply has no file and skips the check
+    // — but a file that is present and does not match is a hard failure
+    // (including a present-but-corrupt file, which loadEmbeddedParams reports as
+    // present with a null value).
+    const embeddedParams = await loadEmbeddedParams(packageDir);
+    if (embeddedParams.present) {
+      // null value: the file is present but unparseable / not a JSON object.
+      // safeParamsHash returns null when the value cannot be JCS-canonicalized
+      // (e.g. a lone surrogate in a string) — otherwise paramsHash would throw
+      // and reject the whole verify promise instead of yielding a report. Any
+      // of these is a hard params_binding_mismatch.
+      const embeddedHash =
+        embeddedParams.value === null ? null : safeParamsHash(embeddedParams.value);
+      if (embeddedHash === null || embeddedHash !== receipt.profile.params_hash) {
+        return fail({
+          receipt_mode: receipt.receipt_mode,
+          reason:
+            "params_binding_mismatch: embedded params.json does not hash to profile.params_hash (the bound mandate was altered)",
+          flags: { ...baseFlags(), sequence_integrity: true }
+        });
+      }
+    }
+  } else {
+    // Legacy / unparameterized path: the chain root MUST be the V0 genesis for
+    // this chain_id. Recomputing it here (not just on the V1 path) closes a
+    // downgrade attack: a parameterized (V1) receipt whose schema_version is
+    // rewritten to v2.0.0 and whose profile.params_hash is stripped would
+    // otherwise pass the version/params correlation, skip the V1 recompute, and
+    // verify as an unparameterized receipt off its V1 initial_chain_state —
+    // silently removing the committed mandate. Since V1 genesis is domain-
+    // separated from V0, that downgraded receipt's initial_chain_state can
+    // never equal computeGenesisV0(chain_id), so it is rejected. Every
+    // legitimately-produced v2.0.0 receipt (freeform, schema-only, or no-param
+    // profile) seeds exactly this V0 genesis, so this is a no-op for them.
+    const expectedV0 = computeGenesisV0(receipt.chain.chain_id);
+    if (expectedV0 !== receipt.chain.initial_chain_state) {
+      return fail({
+        receipt_mode: receipt.receipt_mode,
+        reason:
+          "genesis_binding_mismatch: chain.initial_chain_state is not the SEQUESIGN_INITIAL_STATE_V0 genesis for this chain_id (an unparameterized receipt must seed the V0 genesis; a parameterized receipt may have been downgraded by stripping params_hash)",
+        flags: { ...baseFlags(), sequence_integrity: true }
+      });
+    }
+    // Embed-first packaging (Phase 3): params.json is defined to appear ONLY on
+    // a parameterized receipt. An unparameterized (v2.0.0 / V0) receipt that
+    // nevertheless ships a params.json is smuggling a human-readable "mandate"
+    // that nothing in the chain binds — reject it rather than let a reader treat
+    // it as authoritative.
+    const strayParams = await loadEmbeddedParams(packageDir);
+    if (strayParams.present) {
+      return fail({
+        receipt_mode: receipt.receipt_mode,
+        reason:
+          "params_present_on_unparameterized_receipt: params.json must not be present on a receipt without profile.params_hash",
+        flags: { ...baseFlags(), sequence_integrity: true }
+      });
+    }
   }
   let currentState = receipt.chain.initial_chain_state;
   let agentSignaturesOk = true;
@@ -630,24 +885,84 @@ export async function verifyReceiptPackage(
   }
   let workflowProfileValid: boolean | null = null;
   let profileReport: VerificationReport["profile"] | undefined;
+  let conformant: boolean | null = null;
+  let conformanceReport: VerificationReport["conformance"] | undefined;
+  // The resolved+hash-verified profile document, captured out of the conformance
+  // block so the identity/validity conformance terms — which need the receipt's
+  // resolved assurance and signed action timestamps, only known after identity
+  // resolves below — can be folded into the same conformance verdict. Undefined
+  // for a hard-failed / non-profile_constrained receipt (no terms to evaluate).
+  let mandateResolvedProfile: Record<string, unknown> | undefined;
+  // Template authenticity (Phase 5). Left undefined (and omitted from the report)
+  // for receipts where it does not apply — freeform, and unparameterized (V0)
+  // profile_constrained whose embedded profile.json is not genesis-authenticated.
+  // It is set only inside the V1 grading branch below, where "unattested" is the
+  // meaningful baseline (an authenticated profile with no author signature).
+  // Details of a malformed/invalid signature are appended to `details`
+  // (fail-safe: never a hard failure).
+  let templateAuthenticity: TemplateAuthenticity | undefined;
+  let templateAuthor: VerificationReport["template_author"] | undefined;
+  const templateAuthorDetails: string[] = [];
   if (receipt.receipt_mode === "profile_constrained") {
     if (!receipt.profile)
       return fail({ receipt_mode: receipt.receipt_mode, reason: "missing_profile_binding" });
-    const profileResult = await validateWorkflowProfile({
+    // Phase 3 embed-first: prefer the package's profile.json ONLY when the
+    // genesis authenticates its hash. A V1 (parameterized) receipt commits
+    // profile_hash into SEQUESIGN_GENESIS_V1, which is part of the signed chain,
+    // so the embedded profile.json (whose hash must equal that committed value)
+    // is authenticated and can be trusted offline. A V0 receipt's profile_hash
+    // is NOT genesis-committed and NOT covered by any signature, so an embedded
+    // profile.json is attacker-substitutable; fall back to the trusted bundled
+    // registry for V0, preserving the pre-embedding trust level.
+    const embeddedProfile = await loadEmbeddedProfile(packageDir);
+    const trustEmbedded = hasParamsHash;
+    if (trustEmbedded && embeddedProfile.present && embeddedProfile.value === null) {
+      // A corrupt profile.json on a receipt that RELIES on it is a hard fault.
+      return fail({
+        receipt_mode: receipt.receipt_mode,
+        reason: "embedded_profile_unreadable",
+        profile: {
+          profile_id: receipt.profile.profile_id,
+          profile_hash_verified: false
+        },
+        flags: {
+          ...baseFlags(),
+          hash_integrity: true,
+          sequence_integrity: true,
+          schema_valid: schemaValid,
+          workflow_profile_valid: false,
+          policy_bound: policyBound
+        },
+        details: ["profile.json is present but is not a readable JSON object."]
+      });
+    }
+    // The bound parameters (params.json) resolve the profile's parameterized
+    // evidence_schemas for per-action conformance. Absent/unreadable -> {}.
+    const embeddedParamsForMandate = await loadEmbeddedParams(packageDir);
+    const boundParamsForMandate =
+      embeddedParamsForMandate.present && embeddedParamsForMandate.value !== null
+        ? embeddedParamsForMandate.value
+        : undefined;
+    const mandate = await evaluateMandate({
       profileId: receipt.profile.profile_id,
       profileHash: receipt.profile.profile_hash,
       actions,
-      evidence
+      evidence,
+      boundParams: boundParamsForMandate,
+      embeddedProfile: trustEmbedded ? embeddedProfile.value : null
     });
-    workflowProfileValid = profileResult.valid;
     profileReport = {
       profile_id: receipt.profile.profile_id,
-      profile_hash_verified: profileResult.profileHashVerified
+      profile_hash_verified: mandate.profileHashVerified
     };
-    if (!profileResult.valid)
+    // HARD axis: an unresolvable profile, a profile_hash mismatch, or an
+    // embedded profile_id that disagrees with the receipt means the mandate
+    // identity is broken — the receipt is not the mandate it claims, so it
+    // fails (valid:false), exactly as before Phase 4.
+    if (!mandate.resolved || mandate.hardErrors.length > 0) {
       return fail({
         receipt_mode: receipt.receipt_mode,
-        reason: "workflow_profile_validation_failed",
+        reason: !mandate.resolved ? "unknown_profile" : "profile_binding_invalid",
         profile: profileReport,
         flags: {
           ...baseFlags(),
@@ -657,8 +972,85 @@ export async function verifyReceiptPackage(
           workflow_profile_valid: false,
           policy_bound: policyBound
         },
-        details: profileResult.errors
+        details: mandate.hardErrors
       });
+    }
+    // SOFT axis (violation-preserving seal): workflow / parameter violations do
+    // NOT fail the receipt. It stays valid:true (authentic and untampered);
+    // conformant records whether the sealed work obeyed the mandate, with the
+    // specific violations surfaced for the consumer to act on.
+    conformant = mandate.conformant;
+    workflowProfileValid = mandate.conformant;
+    conformanceReport = {
+      conformant: mandate.conformant,
+      violations: mandate.violations,
+      profile_resolved_from: mandate.resolvedFrom === "embedded" ? "embedded" : "registry"
+    };
+    // Held for the identity/validity conformance terms evaluated after identity
+    // resolution (below) — the resolved document is the same one hashed here.
+    mandateResolvedProfile = mandate.resolvedProfile;
+    // Template authenticity (Phase 5): grade WHO vouches for the mandate. Only
+    // evaluated when the profile document is genesis-authenticated — i.e. the
+    // embedded profile.json we trusted (trustEmbedded, a V1 receipt). Signing an
+    // unauthenticated document (a V0 fallback profile) proves nothing about the
+    // rules actually used, so it stays "unattested" there. The author signature
+    // covers the SAME canonical bytes as profile_hash, so it vouches for exactly
+    // the document conformance was evaluated against.
+    if (trustEmbedded && embeddedProfile.value) {
+      // The receipt is a V1 profile_constrained receipt with an authenticated
+      // profile: authenticity is applicable. Baseline "unattested" (an
+      // authenticated profile with no author signature); the sidecar checks below
+      // may promote it to "attested"/"unrecognized".
+      templateAuthenticity = "unattested";
+      const sidecar = await loadProfileSignature(packageDir);
+      if (sidecar.present && sidecar.value === null) {
+        templateAuthorDetails.push(
+          "profile.sig.json is present but is not a readable JSON object; template authenticity is unattested."
+        );
+      } else if (sidecar.present && sidecar.value) {
+        try {
+          const decoded = decodeAuthorAttestation(sidecar.value.cose_sign1_b64url);
+          const authorPems = trustedAuthorKeys.get(decoded.authorId);
+          if (!authorPems || authorPems.length === 0) {
+            // A signature is present but names an author the verifier does not
+            // recognize (no key to check it against): a claim, not a vouch.
+            templateAuthenticity = "unrecognized";
+            templateAuthorDetails.push(
+              `The profile carries an author signature by "${decoded.authorId}", which is not a recognized template author; template authenticity is unrecognized.`
+            );
+          } else {
+            // The author may have several published keys (a rotation overlap
+            // window): attest on the first candidate that verifies over the
+            // profile bytes.
+            const matchedPem = authorPems.find((pem) =>
+              verifyAuthorSignature({
+                decoded,
+                profile: embeddedProfile.value,
+                publicKeyPem: pem
+              })
+            );
+            if (matchedPem) {
+              templateAuthenticity = "attested";
+              templateAuthor = {
+                author_id: decoded.authorId,
+                author_key_fingerprint: ed25519KeyFingerprint(matchedPem)
+              };
+            } else {
+              // Present, recognized author, but the signature verifies against
+              // none of that author's published keys — fail safe to unattested
+              // with a specific note.
+              templateAuthorDetails.push(
+                `The profile's author signature (by "${decoded.authorId}") did not verify against any recognized author key; template authenticity is unattested.`
+              );
+            }
+          }
+        } catch (err) {
+          templateAuthorDetails.push(
+            `The profile's author signature is malformed (${err instanceof Error ? err.message : String(err)}); template authenticity is unattested.`
+          );
+        }
+      }
+    }
   }
   // v0.6 step #3 (deferred satellites). Bundle verify: a later approval /
   // counterparty confirmation can arrive as a detached, independently
@@ -1176,6 +1568,33 @@ export async function verifyReceiptPackage(
       : { kind: "unregistered" };
   }
 
+  // Fold the identity.min_assurance term (spec §4) into the conformance verdict.
+  // It depends on the receipt's RESOLVED assurance, which is known only now
+  // (after agentIdentity resolves) — later than evaluateMandate ran — so it is
+  // evaluated here rather than inside evaluateMandate. (validity.max_session_
+  // duration_s needs only the action timestamps, so evaluateMandate already
+  // evaluated it and it is in conformanceReport.violations; evaluating it again
+  // here would double-count.) Violation-preserving, exactly like the workflow
+  // conformance: a violation flips conformant/workflowProfileValid to false and
+  // is surfaced, but the receipt stays valid:true.
+  if (mandateResolvedProfile && conformanceReport) {
+    // "registered" for the mandate term requires BOTH that the identity is
+    // platform-vouched (agentIdentity.kind) AND that the registered key actually
+    // authenticated the work (agentIdentityBound — every action's agent
+    // signature verifies against that key). A receipt that merely copies a
+    // registered key + proof but supplies missing/invalid agent signatures is
+    // not key-bound, so it must not satisfy a min_assurance:"registered" floor.
+    const identityAssurance =
+      agentIdentity.kind === "registered" && agentIdentityBound ? "registered" : "self_asserted";
+    const extraViolations = evaluateIdentityTerm(mandateResolvedProfile, identityAssurance);
+    if (extraViolations.length > 0) {
+      conformanceReport.violations = [...conformanceReport.violations, ...extraViolations];
+      conformanceReport.conformant = false;
+      conformant = false;
+      workflowProfileValid = false;
+    }
+  }
+
   // v0.6 arc: identity-anchored base only — `L0` → `L2` (identity) →
   // `L3` (+policy), `L1` the witnessed-only fallback. Approval and
   // counterparty are independent badges (flags.approval /
@@ -1190,8 +1609,18 @@ export async function verifyReceiptPackage(
   if (receipt.receipt_mode === "freeform")
     details.push("Schema/profile validation was not requested for this freeform receipt.");
   if (receipt.receipt_mode !== "freeform") details.push("Schema validation passed.");
-  if (receipt.receipt_mode === "profile_constrained")
-    details.push("Workflow profile validation passed.");
+  if (receipt.receipt_mode === "profile_constrained") {
+    // Reflect the recomputed conformance: a violation-preserving receipt is
+    // valid (authentic) but nonconformant, so the detail must not claim the
+    // workflow validation "passed".
+    if (conformant === false) {
+      details.push(
+        `Mandate conformance failed: ${(conformanceReport?.violations ?? []).join("; ")}`
+      );
+    } else {
+      details.push("Workflow profile validation passed (conformant).");
+    }
+  }
   if (inclusionResult.state === "passed") {
     details.push(
       `Inclusion proofs verified for ${inclusionResult.proven} of ${inclusionResult.total} witness attestations.`
@@ -1201,6 +1630,14 @@ export async function verifyReceiptPackage(
       `Inclusion proofs verified for ${inclusionResult.proven} of ${inclusionResult.total} witness attestations; the rest had no proof attached.`
     );
   }
+  if (templateAuthenticity === "attested" && templateAuthor) {
+    details.push(`Template author signature verified (author "${templateAuthor.author_id}").`);
+  }
+  for (const d of templateAuthorDetails) details.push(d);
+  // Emit template authenticity only where it applies (a V1 profile_constrained
+  // receipt). For freeform / V0 receipts it is undefined and the field is omitted
+  // — consumers and the MCP summary then correctly report null rather than a
+  // spurious "unattested".
   return {
     valid: true,
     verification_level,
@@ -1210,6 +1647,10 @@ export async function verifyReceiptPackage(
     agent_identity: agentIdentity,
     identity_assurance: agentIdentity.kind === "registered" ? "registered" : "self_asserted",
     profile: profileReport,
+    conformant,
+    conformance: conformanceReport,
+    ...(templateAuthenticity ? { template_authenticity: templateAuthenticity } : {}),
+    ...(templateAuthor ? { template_author: templateAuthor } : {}),
     flags: {
       hash_integrity: true,
       sequence_integrity: true,
@@ -1324,6 +1765,132 @@ export function satelliteContentHash(
 // line: a malformed-JSON line (truncated upload, hand-edit) or a line that is
 // not a well-formed satellite is skipped, never fatal — optional deferred
 // evidence must never sink an otherwise-valid R.
+// Embed-first packaging (Phase 3): load the optional top-level params.json.
+// { present: false } when the file is absent (a pre-embedding or
+// unparameterized package — not an error). { present: true, value: null } when
+// the file exists but is unparseable or is not a JSON object; the caller treats
+// that as a hard params_binding_mismatch (a present mandate copy must be well
+// formed). Otherwise the parsed bound-parameter object is returned for
+// re-hashing against the committed profile.params_hash.
+async function loadEmbeddedParams(
+  packageDir: string
+): Promise<{ present: boolean; value: Record<string, unknown> | null }> {
+  let text: string;
+  try {
+    text = await readFile(path.join(packageDir, "params.json"), "utf8");
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return { present: false, value: null };
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, value: null };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { present: true, value: null };
+  }
+  return { present: true, value: parsed as Record<string, unknown> };
+}
+
+// Template-author signature (Phase 5): read the package's profile.sig.json
+// sidecar. `present` distinguishes "no file" (unattested) from "file exists";
+// `value` is null when the file exists but is not a JSON object carrying a
+// string cose_sign1_b64url (surfaced as a detail, graded unattested). Mirrors
+// loadEmbeddedProfile. A malformed sidecar never fails the receipt.
+async function loadProfileSignature(
+  packageDir: string
+): Promise<{ present: boolean; value: ProfileSignatureSidecar | null }> {
+  let text: string;
+  try {
+    text = await readFile(path.join(packageDir, PROFILE_SIG_FILE), "utf8");
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return { present: false, value: null };
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, value: null };
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    typeof (parsed as { cose_sign1_b64url?: unknown }).cose_sign1_b64url !== "string"
+  ) {
+    return { present: true, value: null };
+  }
+  return {
+    present: true,
+    value: { cose_sign1_b64url: (parsed as ProfileSignatureSidecar).cose_sign1_b64url }
+  };
+}
+
+// A well-formed sealed conformance block: exactly {conformant:boolean,
+// violations:string[]}. The verifier never trusts its VERDICT (it recomputes),
+// but a present block must be structurally valid so the version label is
+// meaningful and downstream consumers can rely on the field's type.
+function isValidConformanceBlock(v: unknown): v is { conformant: false; violations: string[] } {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  const keys = Object.keys(o);
+  // A sealed block exists ONLY to record a nonconformance, so its shape is
+  // semantically fixed: exactly {conformant:false, violations:[>=1 strings]}.
+  // (A conformant receipt seals no block.) Enforced identically to the broker's
+  // strict Zod schema so offline verification and ingestion agree.
+  return (
+    keys.length === 2 &&
+    o.conformant === false &&
+    Array.isArray(o.violations) &&
+    o.violations.length >= 1 &&
+    o.violations.every((x) => typeof x === "string")
+  );
+}
+
+// Embed-first packaging (Phase 3): read the package's profile.json. `present`
+// distinguishes "no file" (registry fallback) from "file exists"; `value` is
+// null when the file exists but is not a JSON object (a hard integrity fault,
+// like a corrupt params.json). Mirrors loadEmbeddedParams.
+async function loadEmbeddedProfile(
+  packageDir: string
+): Promise<{ present: boolean; value: Record<string, unknown> | null }> {
+  let text: string;
+  try {
+    text = await readFile(path.join(packageDir, "profile.json"), "utf8");
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return { present: false, value: null };
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, value: null };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { present: true, value: null };
+  }
+  return { present: true, value: parsed as Record<string, unknown> };
+}
+
+// paramsHash canonicalizes via JCS, which throws on a value it cannot
+// represent (e.g. a lone surrogate in a string). In the verifier a throw would
+// reject the whole verify promise instead of returning a report, so wrap it:
+// null means "unhashable", which the caller treats as a params_binding_mismatch.
+function safeParamsHash(value: Record<string, unknown>): string | null {
+  try {
+    return paramsHash(value);
+  } catch {
+    return null;
+  }
+}
+
 async function loadSatellites(packageDir: string): Promise<AttestationSatellite[]> {
   let text: string;
   try {
@@ -1685,6 +2252,13 @@ export function printVerificationReport(report: VerificationReport): void {
       );
     if (report.receipt_mode) console.log(`Mode: ${report.receipt_mode}`);
     if (report.profile) console.log(`Profile: ${report.profile.profile_id}`);
+    if (report.template_authenticity) {
+      const authenticityText =
+        report.template_authenticity === "attested" && report.template_author
+          ? `attested (author "${report.template_author.author_id}")`
+          : report.template_authenticity;
+      console.log(`Template authenticity: ${authenticityText}`);
+    }
     console.log(`Schema validation: ${flagText(report.flags.schema_valid)}`);
     console.log(`Workflow validation: ${flagText(report.flags.workflow_profile_valid)}`);
     if (report.chain) {

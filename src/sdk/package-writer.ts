@@ -15,6 +15,7 @@ import type {
   AgentAttestation,
   AttestationSatellite,
   EvidenceBlob,
+  ProfileSignatureSidecar,
   WitnessAttestation
 } from "../lib/types.js";
 import { isAttestationSatellite } from "../lib/verify.js";
@@ -27,6 +28,9 @@ import {
   APPROVER_KEYS_SUBDIR,
   COUNTERPARTY_KEYS_SUBDIR,
   KEYS_DIR,
+  PARAMS_FILE,
+  PROFILE_FILE,
+  PROFILE_SIG_FILE,
   WITNESS_KEY_FILE,
   isCanonicalCounterpartyId,
   isValidApproverId,
@@ -47,6 +51,32 @@ export interface PackageWriter {
   appendActionLine(action: ActionRecord): Promise<void>;
   appendAttestationLine(line: AttestationLine): Promise<void>;
   writeCheckpoint(checkpoint: SessionCheckpoint): Promise<string>;
+  // Embed-first packaging (Phase 3): the top-level params.json for a
+  // parameterized session. writeParams is called once at session start;
+  // readParams returns the bound values (or null when absent, i.e. an
+  // unparameterized package).
+  writeParams(boundParams: Record<string, unknown>): Promise<string>;
+  readParams(): Promise<Record<string, unknown> | null>;
+  // Remove a stray params.json (no-op when absent). Used on the V0 resume path
+  // to drop a file that must not appear on an unparameterized receipt.
+  deleteParams(): Promise<void>;
+  // Embed-first packaging (Phase 3): the top-level profile.json for a
+  // profile_constrained session. writeProfile is called once at session
+  // start; readProfile returns the embedded profile document (or null when
+  // absent, e.g. a freeform package or one that predates embedding).
+  writeProfile(profile: Record<string, unknown>): Promise<string>;
+  readProfile(): Promise<Record<string, unknown> | null>;
+  // Remove a stray profile.json (no-op when absent). Used to drop a file that
+  // must not appear on a receipt that is not profile_constrained.
+  deleteProfile(): Promise<void>;
+  // Template-author signature (Phase 5): the top-level profile.sig.json sidecar,
+  // a JSON wrapper around the profile's COSE Sign1 author signature. Written at
+  // session start when the bound profile carries one; readProfileSig returns the
+  // wrapper (or null when absent). deleteProfileSig drops a stray sidecar (e.g.
+  // on a resume whose profile has no author signature).
+  writeProfileSig(sidecar: ProfileSignatureSidecar): Promise<string>;
+  readProfileSig(): Promise<ProfileSignatureSidecar | null>;
+  deleteProfileSig(): Promise<void>;
   readAttestations(): Promise<AttestationLine[]>;
   // v0.6 step #3b.3: the TOP-LEVEL deferred-satellite sidecar
   // (packageDir/attestations.jsonl), distinct from the per-action draft
@@ -91,6 +121,9 @@ export function createPackageWriter(directory: string): PackageWriter {
   const keysDir = path.join(directory, KEYS_DIR);
   const envelopePath = path.join(directory, "receipt.json");
   const actionsPath = path.join(directory, ACTIONS_FILE);
+  const paramsPath = path.join(directory, PARAMS_FILE);
+  const profilePath = path.join(directory, PROFILE_FILE);
+  const profileSigPath = path.join(directory, PROFILE_SIG_FILE);
   const draftDir = path.join(directory, ".in-progress");
   const draftEnvelopePath = path.join(draftDir, "receipt.json");
   const attestationsPath = path.join(draftDir, "attestations.jsonl");
@@ -144,6 +177,51 @@ export function createPackageWriter(directory: string): PackageWriter {
       await ensureDir(draftDir);
       await writeJson(checkpointPath, checkpoint);
       return checkpointPath;
+    },
+    async writeParams(boundParams: Record<string, unknown>): Promise<string> {
+      await ensureDir(directory);
+      await writeJson(paramsPath, boundParams);
+      return paramsPath;
+    },
+    async readParams(): Promise<Record<string, unknown> | null> {
+      try {
+        return await readJson<Record<string, unknown>>(paramsPath);
+      } catch {
+        return null;
+      }
+    },
+    async deleteParams(): Promise<void> {
+      await rm(paramsPath, { force: true });
+    },
+    async writeProfile(profile: Record<string, unknown>): Promise<string> {
+      await ensureDir(directory);
+      await writeJson(profilePath, profile);
+      return profilePath;
+    },
+    async readProfile(): Promise<Record<string, unknown> | null> {
+      try {
+        return await readJson<Record<string, unknown>>(profilePath);
+      } catch {
+        return null;
+      }
+    },
+    async deleteProfile(): Promise<void> {
+      await rm(profilePath, { force: true });
+    },
+    async writeProfileSig(sidecar: ProfileSignatureSidecar): Promise<string> {
+      await ensureDir(directory);
+      await writeJson(profileSigPath, sidecar);
+      return profileSigPath;
+    },
+    async readProfileSig(): Promise<ProfileSignatureSidecar | null> {
+      try {
+        return await readJson<ProfileSignatureSidecar>(profileSigPath);
+      } catch {
+        return null;
+      }
+    },
+    async deleteProfileSig(): Promise<void> {
+      await rm(profileSigPath, { force: true });
     },
     async readAttestations(): Promise<AttestationLine[]> {
       try {

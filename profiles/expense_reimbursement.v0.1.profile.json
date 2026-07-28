@@ -1,0 +1,49 @@
+{
+  "profile_id": "sequesign.expense_reimbursement.v0.1",
+  "description": "Agent review then authorization of an employee expense reimbursement, capped at the bound max_amount in the bound currency. Evidence is reference-shaped: an expense-report reference and a per-diem policy reference, with additionalProperties closed on both actions so no unmodeled field or document payload rides along. The verifier enforces the shape, not a reference string's contents (no string-format keyword is in its enforceable set), so populating the reference fields with ids/hashes rather than the underlying documents is the integrator's contract. expense_reviewed must precede reimbursement_authorized, and its decision is constrained to \"approve\": a rejected or needs-info review is not a sealable review under this authorization template, so a nonconformant reject→authorize chain cannot be graded conformant. The authorization is bound to its review (evidence_bindings): reimbursement_authorized must carry the SAME expense_report_ref and amount that were reviewed, so a chain cannot review one report and authorize a different (unreviewed) one. amount is bounded [0, max_amount] on both actions, so a negative reimbursement is nonconformant (and a negative max_amount ceiling yields an empty range, failing closed).",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "max_amount": { "type": "number", "required": true },
+    "currency": { "type": "string", "default": "USD" }
+  },
+  "allowed_actions": ["task_created", "expense_reviewed", "reimbursement_authorized"],
+  "required_actions": ["expense_reviewed", "reimbursement_authorized"],
+  "allowed_transitions": [
+    ["START", "task_created"],
+    ["START", "expense_reviewed"],
+    ["task_created", "expense_reviewed"],
+    ["expense_reviewed", "reimbursement_authorized"]
+  ],
+  "allowed_final_actions": ["reimbursement_authorized"],
+  "evidence_schemas": {
+    "expense_reviewed": {
+      "type": "object",
+      "required": ["expense_report_ref", "amount", "currency", "per_diem_policy_ref", "decision"],
+      "properties": {
+        "expense_report_ref": { "type": "string" },
+        "amount": { "type": "number", "minimum": 0, "maximum": { "$param": "max_amount" } },
+        "currency": { "const": { "$param": "currency" } },
+        "per_diem_policy_ref": { "type": "string" },
+        "decision": { "const": "approve" }
+      },
+      "additionalProperties": false
+    },
+    "reimbursement_authorized": {
+      "type": "object",
+      "required": ["expense_report_ref", "amount", "authorized_by"],
+      "properties": {
+        "expense_report_ref": { "type": "string" },
+        "amount": { "type": "number", "minimum": 0, "maximum": { "$param": "max_amount" } },
+        "authorized_by": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "evidence_bindings": [
+    {
+      "from_action": "expense_reviewed",
+      "to_action": "reimbursement_authorized",
+      "fields": ["expense_report_ref", "amount"]
+    }
+  ]
+}

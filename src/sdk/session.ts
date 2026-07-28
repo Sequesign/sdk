@@ -1,11 +1,11 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
-import { sha256Hex, hashCanonical } from "../lib/hash.js";
-import { lengthPrefixedUtf8 } from "../lib/encoding.js";
+import { hashCanonical } from "../lib/hash.js";
 import { readJson } from "../lib/io.js";
 import { verifyEd25519 } from "../lib/keys.js";
 import { approvalMessage } from "../lib/messages.js";
-import { validateWorkflowProfile } from "../lib/profile.js";
+import { evaluateMandate } from "../lib/profile.js";
+import { resolveGenesisBinding } from "./genesis-binding.js";
 import { verifyReceiptPackage, witnessKeysFromReceipt } from "../lib/verify.js";
 import { applySchemaPolicy } from "./schema-policy.js";
 import { isCanonicalCounterpartyId, isValidApproverId } from "../lib/package-layout.js";
@@ -13,6 +13,7 @@ import type {
   CounterpartyAttestation,
   EvidenceBlob,
   ApprovalAttestation,
+  ReceiptConformance,
   VerifiabilityClass
 } from "../lib/types.js";
 import type { WitnessRequest } from "../lib/witness-types.js";
@@ -72,10 +73,7 @@ import type {
   WitnessConfig,
   WrappedTool
 } from "./types.js";
-import {
-  PLAN_GENERATED_ACTION_TYPE,
-  PLAN_STEP_EXECUTED_ACTION_TYPE
-} from "./types.js";
+import { PLAN_GENERATED_ACTION_TYPE, PLAN_STEP_EXECUTED_ACTION_TYPE } from "./types.js";
 import {
   connectWitness,
   resolveWitnessConfig,
@@ -96,12 +94,12 @@ export async function startSessionImpl(
   }
   if (mode === "profile_constrained" && !init.profile) {
     throw new PackageStateError(
-      'profile_constrained mode requires SessionInit.profile with profile_id and profile_hash.'
+      "profile_constrained mode requires SessionInit.profile with profile_id and profile_hash."
     );
   }
   if (!init.package) {
     throw new PackageStateError(
-      'Direct mode requires init.package. Pass { directory, ifExists } to write the receipt package to disk.'
+      "Direct mode requires init.package. Pass { directory, ifExists } to write the receipt package to disk."
     );
   }
   const pkg = init.package;
@@ -129,16 +127,32 @@ export async function startSessionImpl(
     }
   }
 
+  const chainId = init.chainId ?? generateChainId();
+  const receiptId = init.receiptId ?? generateReceiptId();
+
+  // Genesis binding (template system). Resolve the sealed profile reference and
+  // the chain genesis (V1 when parameterized, else V0) via the shared helper so
+  // the direct and managed paths cannot drift. A parameterized session commits
+  // the mandate (profile_hash + params_hash) and the parties into
+  // SEQUESIGN_GENESIS_V1; every other session keeps the byte-identical V0
+  // genesis. This runs BEFORE the package writer is initialized, so a binding
+  // failure (unknown profile, hash mismatch, bad params) throws without leaving
+  // a half-created package directory behind. boundParams travels in the package
+  // (params.json) and is restored on resume; undefined on the V0 path.
+  const { profileRef, initialChainState, boundParams, profileDocument, profileAuthorSignature } =
+    await resolveGenesisBinding({
+      chainId,
+      taskId: init.task.taskId,
+      delegatorId: init.task.delegatorId,
+      agentId: init.agent.agentId,
+      profile: init.profile,
+      params: init.params
+    });
+
   const writer = createPackageWriter(pkg.directory);
   await writer.initialize(ifExists === "reset");
 
   const witness: WitnessClient = await connectWitness(mergedWitnessConfig);
-
-  const chainId = init.chainId ?? generateChainId();
-  const receiptId = init.receiptId ?? generateReceiptId();
-  const initialChainState = sha256Hex(
-    lengthPrefixedUtf8(["SEQUESIGN_INITIAL_STATE_V0", chainId])
-  );
 
   const state = new SessionState({
     chainId,
@@ -153,7 +167,10 @@ export async function startSessionImpl(
     initialChainState,
     sequenceStart: 1,
     schemaReferences: init.schemaReferences,
-    profile: init.profile,
+    profile: profileRef,
+    boundParams,
+    profileDocument,
+    profileAuthorSignature,
     // §3.1 Retention PR 1: accepted for API symmetry with managed
     // mode. Direct mode does not write a library.receipts row (the
     // customer holds the package), so the value is carried in state
@@ -167,6 +184,29 @@ export async function startSessionImpl(
     agentPublicKeyPem: state.agentPublicKeyPem,
     witnessIdentity: witness.currentKey
   });
+
+  // Embed-first packaging (Phase 3): a parameterized session writes its bound
+  // values to a top-level params.json so the mandate travels in the package —
+  // restorable on resume and re-hashable by an offline verifier. Written once;
+  // it survives finalize (not under .in-progress/).
+  if (boundParams !== undefined) {
+    await writer.writeParams(boundParams);
+  }
+  // Embed-first packaging (Phase 3): a profile_constrained session writes the
+  // resolved profile document to a top-level profile.json so the mandate's
+  // rules travel in the package — re-evaluated for conformance and re-hashed
+  // (profile_hash) by an offline verifier with no registry. Written once; it
+  // survives finalize (not under .in-progress/).
+  if (profileDocument !== undefined) {
+    await writer.writeProfile(profileDocument);
+  }
+  // Template system Phase 5: when the parameterized profile carries a
+  // template-author signature, write it to a top-level profile.sig.json sidecar
+  // so an offline verifier can grade template_authenticity. Written once; it
+  // survives finalize (not under .in-progress/).
+  if (profileAuthorSignature !== undefined) {
+    await writer.writeProfileSig(profileAuthorSignature);
+  }
 
   const session = new SessionImpl(init.agent.keypair.privateKeyPem, state, writer, witness);
   await session.persistCheckpoint();
@@ -195,9 +235,7 @@ function distinctCounterpartyKeys(
 // One key file per distinct approver_id, keeping the first key seen.
 // recordApproval rejects a same-id/different-key pair, so first-seen
 // is the only key for that id.
-function distinctApproverKeys(
-  attestations: ApprovalAttestation[]
-): ApproverPublicKey[] {
+function distinctApproverKeys(attestations: ApprovalAttestation[]): ApproverPublicKey[] {
   const seen = new Set<string>();
   const keys: ApproverPublicKey[] = [];
   for (const att of attestations) {
@@ -292,7 +330,15 @@ export class SessionImpl implements Session {
       action_record_hash: actionRecordHash,
       previous_chain_state: this._state.currentChainState,
       chain_state: nextChainState,
-      receipt_schema_version: "sequesign.receipt.v2.0.0",
+      // The witness records this in its transparency-log entry to support format
+      // migrations, so it must match the schema version this receipt will
+      // finalize as: a parameterized session (profile carries the bound
+      // params_hash) seals v2.1.0, everything else v2.0.0. (The per-action
+      // attestation the witness signs does not include this field, so the
+      // choice does not affect signature verification — only the log index.)
+      receipt_schema_version: this._state.profile?.params_hash
+        ? "sequesign.receipt.v2.1.0"
+        : "sequesign.receipt.v2.0.0",
       // Opt into direct-mode agent-identity binding: tell the witness which key
       // we're signing with. If this key is the one registered to the API key,
       // the witness enforces the match and returns the account's agent_identity
@@ -355,9 +401,7 @@ export class SessionImpl implements Session {
     };
   }
 
-  async recordApproval(
-    input: RecordApprovalInput
-  ): Promise<ApprovalAttestation> {
+  async recordApproval(input: RecordApprovalInput): Promise<ApprovalAttestation> {
     if (this._state.finalized) {
       throw new SessionStateError("Session is already finalized.");
     }
@@ -488,9 +532,7 @@ export class SessionImpl implements Session {
   }
 
   async recordPlanStep(input: RecordPlanStepInput): Promise<RecordedAction> {
-    const planAction = this._state
-      .actions()
-      .find((a) => a.action_id === input.planActionId);
+    const planAction = this._state.actions().find((a) => a.action_id === input.planActionId);
     if (!planAction) {
       throw new PlanReferenceError(
         `No recorded plan_generated action with action_id "${input.planActionId}" exists in the chain. Record a plan with recordPlan before referencing it.`,
@@ -662,9 +704,7 @@ export class SessionImpl implements Session {
     options: FetchInclusionProofsOptions = {}
   ): Promise<FetchInclusionProofsResult> {
     if (this._state.finalized) {
-      throw new SessionStateError(
-        "Cannot fetch inclusion proofs after the session is finalized."
-      );
+      throw new SessionStateError("Cannot fetch inclusion proofs after the session is finalized.");
     }
     const attestations = this._state.witnessAttestations();
     const timeoutMs = options.timeoutMs ?? DEFAULT_INCLUSION_PROOF_TIMEOUT_MS;
@@ -720,20 +760,33 @@ export class SessionImpl implements Session {
       throw new SessionStateError("Session is already finalized.");
     }
     if (this._state.snapshot().actionsRecorded === 0) {
-      throw new FinalizationError(
-        "Cannot finalize a session that has not recorded any actions."
-      );
+      throw new FinalizationError("Cannot finalize a session that has not recorded any actions.");
     }
+    let sealedConformance: ReceiptConformance | undefined;
     if (this._state.mode === "profile_constrained" && this._state.profile) {
       const evidenceBlobs = await this.loadAllEvidence();
-      const result = await validateWorkflowProfile({
+      const mandate = await evaluateMandate({
         profileId: this._state.profile.profile_id,
         profileHash: this._state.profile.profile_hash,
         actions: this._state.actions(),
-        evidence: evidenceBlobs
+        evidence: evidenceBlobs,
+        boundParams: this._state.boundParams,
+        embeddedProfile: this._state.profileDocument
       });
-      if (!result.valid) {
-        throw new ProfileValidationError(this._state.profile.profile_id, result.errors);
+      // HARD axis: an unresolvable profile or a profile_hash mismatch is not
+      // sealable — the mandate identity is broken. Throw, exactly as before.
+      if (!mandate.resolved || !mandate.profileHashVerified) {
+        throw new ProfileValidationError(this._state.profile.profile_id, mandate.hardErrors);
+      }
+      // SOFT axis (violation-preserving seal): nonconformant work still seals.
+      // Record the producer's self-assessment in the receipt (bumps it to
+      // v2.2.0) and warn; a conformant receipt seals no block and stays
+      // v2.1.0/v2.0.0. The verifier recomputes conformance either way.
+      if (!mandate.conformant) {
+        sealedConformance = { conformant: false, violations: mandate.violations };
+        console.warn(
+          `Sequesign: sealing a receipt whose work does not conform to mandate ${this._state.profile.profile_id}: ${mandate.violations.join("; ")}`
+        );
       }
     }
     if (options.inclusionProofTimeoutMs !== undefined) {
@@ -756,7 +809,8 @@ export class SessionImpl implements Session {
     }
     const receipt = buildReceiptEnvelope({
       state: this._state,
-      finalChainState: this._state.currentChainState
+      finalChainState: this._state.currentChainState,
+      conformance: sealedConformance
     });
     const envelopePath = await this.writer.writeEnvelope(receipt);
     // Integrity self-check: anchor to the witness this session just
@@ -822,5 +876,4 @@ export class SessionImpl implements Session {
     }
     return blobs;
   }
-
 }

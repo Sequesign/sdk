@@ -1,0 +1,29 @@
+{
+  "profile_id": "sequesign.prior_auth_submission.v0.1",
+  "description": "Agent submission of a payer prior-authorization request. Evidence is reference-shaped: the schema requires an opaque patient reference and a clinical-justification document reference and closes additionalProperties, so no unmodeled field (e.g. patient_name) or document payload can ride along and still grade conformant. The verifier enforces the SHAPE — which fields are present, and that no others are — but the reference fields are free strings and it cannot police their contents (string-format constraints such as a hash pattern are outside its enforceable keyword set). Populating patient_ref and clinical_justification_ref with opaque ids/hashes rather than PHI or document contents is therefore the integrator's contract, not a schema-enforced guarantee. When payer_allowlist is bound, the payer must be a member of it.",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "payer_allowlist": { "type": "array", "required": false }
+  },
+  "allowed_actions": ["task_created", "submit_prior_auth"],
+  "required_actions": ["submit_prior_auth"],
+  "allowed_transitions": [
+    ["START", "task_created"],
+    ["START", "submit_prior_auth"],
+    ["task_created", "submit_prior_auth"]
+  ],
+  "allowed_final_actions": ["submit_prior_auth"],
+  "evidence_schemas": {
+    "submit_prior_auth": {
+      "type": "object",
+      "required": ["patient_ref", "payer", "service_codes", "clinical_justification_ref"],
+      "properties": {
+        "patient_ref": { "type": "string" },
+        "payer": { "$allowlist": "payer_allowlist" },
+        "service_codes": { "type": "array", "items": { "type": "string" } },
+        "clinical_justification_ref": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

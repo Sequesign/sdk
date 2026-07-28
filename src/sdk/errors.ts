@@ -192,6 +192,20 @@ export class ProfileValidationError extends SequesignSdkError {
   }
 }
 
+export class ParameterBindingError extends SequesignSdkError {
+  readonly profileId: string;
+  readonly errors: string[];
+  constructor(profileId: string, errors: string[]) {
+    super(
+      "parameter_binding_failed",
+      `Cannot bind parameters for profile "${profileId}": ${errors.join("; ")}`
+    );
+    this.name = "ParameterBindingError";
+    this.profileId = profileId;
+    this.errors = errors;
+  }
+}
+
 export class InclusionProofTimeoutError extends SequesignSdkError {
   readonly position: number;
   readonly timeoutMs: number;

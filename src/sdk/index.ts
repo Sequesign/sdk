@@ -14,14 +14,8 @@ import { tmpdir } from "node:os";
 import { resolveSdkConfig, SdkConfigError } from "./config.js";
 import { startManagedSessionImpl } from "./managed-session.js";
 import { ResumeError } from "./errors.js";
-import {
-  resumeFromPackageImpl,
-  resumeSessionImpl
-} from "./resume.js";
-import {
-  submitApprovalSatelliteImpl,
-  submitCounterpartySatelliteImpl
-} from "./satellite.js";
+import { resumeFromPackageImpl, resumeSessionImpl } from "./resume.js";
+import { submitApprovalSatelliteImpl, submitCounterpartySatelliteImpl } from "./satellite.js";
 import { startSessionImpl } from "./session.js";
 import type {
   KeyMaterial,
@@ -271,9 +265,32 @@ export {
   loadSchemaByActionType,
   loadSchemaById,
   loadProfileById,
-  loadManifest
+  loadManifest,
+  resolveTemplateTier
 } from "../lib/schema-registry.js";
-export type { RegistryManifest } from "../lib/schema-registry.js";
+export type { RegistryManifest, TemplateTier } from "../lib/schema-registry.js";
+
+// Template system Phase 5: the template-author signing/verifying primitives.
+// A template author (or a signing tool built on the SDK) needs signProfileAuthor
+// to produce the profile.sig.json COSE Sign1; decode/verify are exposed for
+// consumers that inspect or re-check an author signature independently.
+// Previously these lived only in the repo (scripts/sign-profile.ts) and were not
+// importable from the published @sequesign/sdk.
+export {
+  signProfileAuthor,
+  decodeAuthorAttestation,
+  verifyAuthorSignature,
+  canonicalProfileBytes
+} from "../lib/author-attestation.js";
+export type { DecodedAuthorAttestation } from "../lib/author-attestation.js";
+
+// Template system Phase 6: the a-priori single-action mandate check. The MCP
+// server's sequesign_check_action tool (and any consumer building a pre-record
+// gate) uses this to ask "would this action be permitted by the template, and
+// does my evidence satisfy it?" before recording — the pure complement to the
+// post-hoc evaluateMandate conformance grade.
+export { checkAction } from "../lib/check-action.js";
+export type { CheckActionInput, CheckActionResult } from "../lib/check-action.js";
 
 export type {
   Sdk,

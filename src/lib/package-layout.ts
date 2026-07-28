@@ -11,6 +11,40 @@ export const AGENT_KEY_FILE = "agent.pub.pem";
 export const WITNESS_KEY_FILE = "witness.pub.pem";
 export const ACTIONS_FILE = "actions.jsonl";
 export const EVIDENCE_DIR = "evidence";
+// Embed-first packaging (template system Phase 3): the concrete bound
+// parameter values for a parameterized (V1-genesis) receipt travel in the
+// package as a top-level params.json. It is written once at session start,
+// survives finalize (it is NOT under .in-progress/), lets a parameterized
+// session be resumed, and lets an offline verifier re-hash the values and
+// confirm they match the profile.params_hash committed into the genesis.
+// Absent for unparameterized (V0) receipts.
+export const PARAMS_FILE = "params.json";
+
+// Embed-first packaging (template system Phase 3): the resolved workflow
+// profile document for a profile_constrained receipt travels in the package
+// as a top-level profile.json. It is written once at session start, survives
+// finalize (it is NOT under .in-progress/), and lets an offline verifier
+// re-resolve the mandate's rules — allowed actions, transitions, conditional
+// requirements, and parameterized evidence_schemas — and re-verify
+// profile_hash WITHOUT a registry. Absent for freeform receipts; the verifier
+// falls back to its bundled registry when a profile_constrained package
+// predates embedding.
+export const PROFILE_FILE = "profile.json";
+
+// Template-author signature (template system Phase 5): the COSE Sign1 by which a
+// template author vouches for the profile document travels in the package as a
+// top-level profile.sig.json, a sidecar to profile.json. It is a JSON wrapper
+// ({ "cose_sign1_b64url": string }) around genuine COSE Sign1 bytes so it reuses
+// the same JSON write/store/serve path as profile.json and params.json; the
+// decoded bytes are still standard COSE. It is written at session start when the
+// bound profile carries an author signature, survives finalize (NOT under
+// .in-progress/), and lets an offline verifier grade template_authenticity
+// WITHOUT a registry. Absent when the profile has no author signature (the
+// mandate content is still hash-bound via genesis; it is simply not
+// author-vouched) or for freeform receipts. The signature is over the same
+// canonical bytes as profile_hash, so stripping it can only LOWER the grade,
+// never forge authenticity.
+export const PROFILE_SIG_FILE = "profile.sig.json";
 
 // A counterparty_id becomes a path segment under keys/counterparty/, so
 // it must be filesystem-safe and collision-free. Counterparties are

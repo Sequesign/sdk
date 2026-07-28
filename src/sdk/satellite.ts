@@ -385,7 +385,13 @@ export async function submitApprovalSatelliteImpl(
         (s): s is ApprovalSatellite => s.schema_version === "sequesign.approval_satellite.v1.0.0"
       )
       .filter((s) =>
-        approvalSatelliteFoldable(s, receipt, attestedReceiptHash, recordedActionTypes, trustedWitnessIds)
+        approvalSatelliteFoldable(
+          s,
+          receipt,
+          attestedReceiptHash,
+          recordedActionTypes,
+          trustedWitnessIds
+        )
       )
       .map((s) => s.approval.approval_id)
   ]);
@@ -539,7 +545,9 @@ export async function submitCounterpartySatelliteImpl(
         (s): s is CounterpartySatellite =>
           s.schema_version === "sequesign.counterparty_satellite.v1.0.0"
       )
-      .filter((s) => counterpartySatelliteFoldable(s, receipt, attestedReceiptHash, trustedWitnessIds))
+      .filter((s) =>
+        counterpartySatelliteFoldable(s, receipt, attestedReceiptHash, trustedWitnessIds)
+      )
       .map((s) => key(s.counterparty.counterparty_id, s.counterparty.attested_action_id))
   ]);
   if (existing.has(key(counterparty.counterparty_id, counterparty.attested_action_id))) {
