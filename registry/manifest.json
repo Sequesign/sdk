@@ -78,6 +78,108 @@
       "action_type": "reimbursement_authorized",
       "path": "schemas/action/reimbursement_authorized.v0.1.schema.json",
       "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.clinical_task_created.v0.1",
+      "action_type": "clinical_task_created",
+      "path": "schemas/action/clinical_task_created.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.prior_auth_reviewed.v0.1",
+      "action_type": "prior_auth_reviewed",
+      "path": "schemas/action/prior_auth_reviewed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.record_scanned.v0.1",
+      "action_type": "record_scanned",
+      "path": "schemas/action/record_scanned.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.resource_purchased.v0.1",
+      "action_type": "resource_purchased",
+      "path": "schemas/action/resource_purchased.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.document_drafted.v0.1",
+      "action_type": "document_drafted",
+      "path": "schemas/action/document_drafted.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.citations_checked.v0.1",
+      "action_type": "citations_checked",
+      "path": "schemas/action/citations_checked.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.document_filed.v0.1",
+      "action_type": "document_filed",
+      "path": "schemas/action/document_filed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.docket_confirmed.v0.1",
+      "action_type": "docket_confirmed",
+      "path": "schemas/action/docket_confirmed.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.flight_dispatched.v0.1",
+      "action_type": "flight_dispatched",
+      "path": "schemas/action/flight_dispatched.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.sector_entered.v0.1",
+      "action_type": "sector_entered",
+      "path": "schemas/action/sector_entered.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.inspection_captured.v0.1",
+      "action_type": "inspection_captured",
+      "path": "schemas/action/inspection_captured.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.flight_recovered.v0.1",
+      "action_type": "flight_recovered",
+      "path": "schemas/action/flight_recovered.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.sources_gathered.v0.1",
+      "action_type": "sources_gathered",
+      "path": "schemas/action/sources_gathered.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.content_drafted.v0.1",
+      "action_type": "content_drafted",
+      "path": "schemas/action/content_drafted.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.content_fact_checked.v0.1",
+      "action_type": "content_fact_checked",
+      "path": "schemas/action/content_fact_checked.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.editor_signed_off.v0.1",
+      "action_type": "editor_signed_off",
+      "path": "schemas/action/editor_signed_off.v0.1.schema.json",
+      "hash_alg": "sha256"
+    },
+    {
+      "schema_id": "sequesign.content_published.v0.1",
+      "action_type": "content_published",
+      "path": "schemas/action/content_published.v0.1.schema.json",
+      "hash_alg": "sha256"
     }
   ],
   "profiles": [
@@ -118,6 +220,30 @@
       "path": "profiles/expense_reimbursement.v0.1.profile.json",
       "hash_alg": "sha256",
       "signature_path": "profiles/expense_reimbursement.v0.1.profile.sig.json",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.bounded_spend_mandate.v0.1",
+      "path": "profiles/bounded_spend_mandate.v0.1.profile.json",
+      "hash_alg": "sha256",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.document_execution.v0.1",
+      "path": "profiles/document_execution.v0.1.profile.json",
+      "hash_alg": "sha256",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.flight_execution.v0.1",
+      "path": "profiles/flight_execution.v0.1.profile.json",
+      "hash_alg": "sha256",
+      "tier": "official"
+    },
+    {
+      "profile_id": "sequesign.content_provenance.v0.1",
+      "path": "profiles/content_provenance.v0.1.profile.json",
+      "hash_alg": "sha256",
       "tier": "official"
     }
   ]

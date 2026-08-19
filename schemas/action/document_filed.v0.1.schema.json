@@ -1,0 +1,23 @@
+{
+  "schema_id": "sequesign.document_filed.v0.1",
+  "type": "object",
+  "required": ["matter_ref", "doc_type", "court", "document_hash"],
+  "properties": {
+    "matter_ref": {
+      "type": "string"
+    },
+    "doc_type": {
+      "type": "string"
+    },
+    "court": {
+      "type": "string"
+    },
+    "document_hash": {
+      "type": "string"
+    },
+    "filing_ref": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,76 @@
+{
+  "profile_id": "sequesign.document_execution.v0.1",
+  "description": "A delegated document-work mandate for an agent that takes a legal matter from draft to docket. The chain runs document_drafted -> citations_checked -> document_filed -> docket_confirmed (cite-check and docket are optional; draft and file are required). doc_type is confined to allowed_doc_types on both the draft and the filing, and court is confined to allowed_courts on both the filing and the docket confirmation, so a filing of an unpermitted document type, or in a court off the allowlist, is nonconformant. The chain is bound end to end (evidence_bindings): the citation check and the filing must carry the SAME document_hash and matter_ref that were drafted (you cannot draft one document and file a different one), and the docket confirmation must carry the SAME matter_ref and court as the filing. Evidence is closed (additionalProperties:false). Privilege-safe by construction: the document text, the matter reference, the working title, and the cite-check findings are sealed only as sha256 hashes; only closed-vocabulary or public values (doc_type, court, docket number, authorities-checked count) are sealed in the clear. The verifier enforces the shape, the allowlists, and the bindings — not the meaning of the hashed references.",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "allowed_doc_types": { "type": "array", "required": true },
+    "allowed_courts": { "type": "array", "required": true }
+  },
+  "allowed_actions": [
+    "document_drafted",
+    "citations_checked",
+    "document_filed",
+    "docket_confirmed"
+  ],
+  "required_actions": ["document_drafted", "document_filed"],
+  "allowed_transitions": [
+    ["START", "document_drafted"],
+    ["document_drafted", "citations_checked"],
+    ["document_drafted", "document_filed"],
+    ["citations_checked", "document_filed"],
+    ["document_filed", "docket_confirmed"]
+  ],
+  "allowed_final_actions": ["document_filed", "docket_confirmed"],
+  "evidence_schemas": {
+    "document_drafted": {
+      "type": "object",
+      "required": ["matter_ref", "doc_type", "document_hash"],
+      "properties": {
+        "matter_ref": { "type": "string" },
+        "doc_type": { "$allowlist": "allowed_doc_types" },
+        "document_hash": { "type": "string" },
+        "title_hash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "document_filed": {
+      "type": "object",
+      "required": ["matter_ref", "doc_type", "court", "document_hash"],
+      "properties": {
+        "matter_ref": { "type": "string" },
+        "doc_type": { "$allowlist": "allowed_doc_types" },
+        "court": { "$allowlist": "allowed_courts" },
+        "document_hash": { "type": "string" },
+        "filing_ref": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "docket_confirmed": {
+      "type": "object",
+      "required": ["matter_ref", "court", "docket_number"],
+      "properties": {
+        "matter_ref": { "type": "string" },
+        "court": { "$allowlist": "allowed_courts" },
+        "docket_number": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "evidence_bindings": [
+    {
+      "from_action": "document_drafted",
+      "to_action": "citations_checked",
+      "fields": ["document_hash", "matter_ref"]
+    },
+    {
+      "from_action": "document_drafted",
+      "to_action": "document_filed",
+      "fields": ["document_hash", "matter_ref"]
+    },
+    {
+      "from_action": "document_filed",
+      "to_action": "docket_confirmed",
+      "fields": ["matter_ref", "court"]
+    }
+  ]
+}

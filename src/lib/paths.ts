@@ -39,13 +39,30 @@ function findProjectRoot(start: string): string {
   }
 }
 
-const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+// Directory containing this module, or "" where no module URL exists to
+// resolve. In a bundled Cloudflare Pages Function (Workers runtime),
+// import.meta.url is undefined at runtime — the Functions bundler emits no
+// module URL — and there is no filesystem to walk, so this must not reach
+// fileURLToPath (it throws on undefined, killing the whole Worker at load).
+// "" is the same sentinel the browser branch of findProjectRoot returns; see
+// the comment there for why "" and not "/". Workers is not covered by that
+// branch because nodejs_compat defines `process`.
+const moduleDir = (() => {
+  const url = import.meta.url;
+  if (typeof url !== "string" || url.length === 0) {
+    return "";
+  }
+  return path.dirname(fileURLToPath(url));
+})();
 
 // Absolute path to the repository root, resolved by walking up from this
 // module's directory until a package.json is found. Resolving this way
 // makes every helper below independent of process.cwd(), which differs
 // between local dev (repo root) and Railway (whatever the runtime sets).
-export const PROJECT_ROOT: string = findProjectRoot(moduleDir);
+// Where no module directory could be resolved (Workers), skip the walk
+// entirely — there is no filesystem, and callers on that runtime supply
+// documents inline and never read registry paths.
+export const PROJECT_ROOT: string = moduleDir === "" ? "" : findProjectRoot(moduleDir);
 
 export function registryPath(...parts: string[]): string {
   // Honor an opt-in override of the registry directory (the folder that

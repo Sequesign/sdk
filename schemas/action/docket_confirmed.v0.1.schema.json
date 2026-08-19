@@ -1,0 +1,17 @@
+{
+  "schema_id": "sequesign.docket_confirmed.v0.1",
+  "type": "object",
+  "required": ["matter_ref", "court", "docket_number"],
+  "properties": {
+    "matter_ref": {
+      "type": "string"
+    },
+    "court": {
+      "type": "string"
+    },
+    "docket_number": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

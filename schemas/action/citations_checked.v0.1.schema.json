@@ -1,0 +1,21 @@
+{
+  "schema_id": "sequesign.citations_checked.v0.1",
+  "type": "object",
+  "required": ["matter_ref", "document_hash", "authorities_checked"],
+  "properties": {
+    "matter_ref": {
+      "type": "string"
+    },
+    "document_hash": {
+      "type": "string"
+    },
+    "authorities_checked": {
+      "type": "number",
+      "minimum": 0
+    },
+    "findings_ref": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

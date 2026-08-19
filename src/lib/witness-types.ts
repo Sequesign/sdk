@@ -77,6 +77,16 @@ export type KeyDiscoveryDocument = {
     key_type: "witness";
     public_key: string;
     valid_from: string;
+    // Present only on RETIRED keys (rotated out): the UTC cutover time after
+    // which the witness no longer signs with this key. The field name matches
+    // the protocol spec's key_discovery contract (docs/protocol-spec.md 9.2).
+    // The key stays published so receipts it signed BEFORE this time keep
+    // verifying; the field records when it stopped being active. Advisory only —
+    // the verifier does NOT reject a signature dated after valid_until (it
+    // anchors on the key's fingerprint), so retired-key publication is for
+    // rotating an UNCOMPROMISED key, not for containing a compromise. Absent on
+    // the single active key.
+    valid_until?: string;
     purposes: string[];
   }>;
 };

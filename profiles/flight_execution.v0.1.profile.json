@@ -1,0 +1,77 @@
+{
+  "profile_id": "sequesign.flight_execution.v0.1",
+  "description": "A flight mandate for an autonomous aerial agent that runs an inspection mission. The chain runs flight_dispatched -> (sector_entered | inspection_captured)* -> flight_recovered (takeoff and recovery are required; airspace legs and captures repeat). Two conformance levers, both applied to EVERY airspace leg and EVERY capture: sector must be one of allowed_sectors (a leg or capture in a sector off the allowlist is nonconformant), and altitude_ft must be within [0, max_altitude_ft] (any leg or capture over the altitude ceiling is nonconformant — a breach of even a single foot on any action fails conformance). Because the altitude bound is enforced per action, the whole flight must stay under the ceiling, not merely on average. Evidence is closed (additionalProperties:false). The mission is bound end to end (evidence_bindings): recovery must carry the same mission_ref that was dispatched. Privilege/PII-safe by construction: captured imagery is sealed only as a sha256 imagery_hash; only closed-vocabulary or telemetry values (sector, altitude, frame count, base, mission reference) are sealed in the clear. The verifier enforces the shape, the allowlist, the ceiling, and the binding — not the contents of the hashed imagery.",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "allowed_sectors": { "type": "array", "required": true },
+    "max_altitude_ft": { "type": "number", "required": true }
+  },
+  "allowed_actions": [
+    "flight_dispatched",
+    "sector_entered",
+    "inspection_captured",
+    "flight_recovered"
+  ],
+  "required_actions": ["flight_dispatched", "flight_recovered"],
+  "allowed_transitions": [
+    ["START", "flight_dispatched"],
+    ["flight_dispatched", "sector_entered"],
+    ["sector_entered", "sector_entered"],
+    ["sector_entered", "inspection_captured"],
+    ["inspection_captured", "inspection_captured"],
+    ["inspection_captured", "sector_entered"],
+    ["sector_entered", "flight_recovered"],
+    ["inspection_captured", "flight_recovered"]
+  ],
+  "allowed_final_actions": ["flight_recovered"],
+  "evidence_schemas": {
+    "sector_entered": {
+      "type": "object",
+      "required": ["mission_ref", "sector", "altitude_ft"],
+      "properties": {
+        "mission_ref": { "type": "string" },
+        "sector": { "$allowlist": "allowed_sectors" },
+        "altitude_ft": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": { "$param": "max_altitude_ft" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "inspection_captured": {
+      "type": "object",
+      "required": ["mission_ref", "target", "frame_count", "sector", "altitude_ft", "imagery_hash"],
+      "properties": {
+        "mission_ref": { "type": "string" },
+        "target": { "type": "string" },
+        "frame_count": { "type": "number", "minimum": 0 },
+        "sector": { "$allowlist": "allowed_sectors" },
+        "altitude_ft": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": { "$param": "max_altitude_ft" }
+        },
+        "imagery_hash": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "evidence_bindings": [
+    {
+      "from_action": "flight_dispatched",
+      "to_action": "sector_entered",
+      "fields": ["mission_ref"]
+    },
+    {
+      "from_action": "flight_dispatched",
+      "to_action": "inspection_captured",
+      "fields": ["mission_ref"]
+    },
+    {
+      "from_action": "flight_dispatched",
+      "to_action": "flight_recovered",
+      "fields": ["mission_ref"]
+    }
+  ]
+}

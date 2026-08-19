@@ -122,6 +122,7 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
   const discovery: KeyDiscoveryClient = createKeyDiscoveryClient({
     baseUrl: config.baseUrl,
     fetchImpl: config.fetchImpl,
+    requestTimeoutMs: config.requestTimeoutMs,
     staticIdentity: config.staticIdentity
   });
 
@@ -138,8 +139,67 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
     currentKey = { ...config.staticIdentity, witnessId };
   }
 
+  // A 200 attestation was returned — so a transparency-log entry was already
+  // appended and the signature was already billed — but it did not verify
+  // against our cached witness key. Resolve WITHOUT re-POSTing: the /witness
+  // POST is mutating and non-idempotent, so a second POST would create a
+  // DUPLICATE log commitment and a duplicate charge. Re-fetch DISCOVERY ONLY (an
+  // idempotent GET), bounded and with backoff between tries.
+  //
+  // During an HA rolling key cutover — `flyctl secrets set` restarts the witness
+  // machines one at a time — the machine that signed the POST can differ from
+  // the machine our discovery GET first hit. Crucially, once the signing machine
+  // drains, its key is published only as a RETIRED entry, so we must verify the
+  // attestation against EVERY published witness key (active + retired), not just
+  // the active one — otherwise a valid, already-billed attestation whose key is
+  // present in discovery would still fail. We also adopt the active key for
+  // future signing when it rotates, guard against an active-key rotation
+  // ping-pong, and throw once discovery attempts are exhausted. Throwing here
+  // lands in the caller's catch as a terminal (non-retriable) error, so the POST
+  // is never repeated.
+  async function resolveMismatchByRediscovery(
+    verify: (key: WitnessIdentity) => boolean,
+    seenKeyIds: Set<string>
+  ): Promise<void> {
+    for (let discAttempt = 1; discAttempt <= config.maxAttempts; discAttempt++) {
+      let published: WitnessIdentity[];
+      try {
+        published = await discovery.fetchAllWitnessKeys(true);
+      } catch (err) {
+        // A transient discovery GET failure (timeout / 5xx / network) must not
+        // discard an already-committed, already-billed attestation. The GET is
+        // idempotent, so back off and retry it within the remaining attempts;
+        // only surface the failure once they are exhausted.
+        if (discAttempt < config.maxAttempts) {
+          await sleep(backoffDelay(discAttempt, config));
+          continue;
+        }
+        throw err;
+      }
+      // published[0] is the active key; adopt it for future signing if it
+      // rotated, guarding against a ping-pong back to a key we already tried.
+      const active = published[0];
+      if (active && active.keyId !== currentKey.keyId) {
+        if (seenKeyIds.has(active.keyId)) {
+          throw new WitnessKeyRotationLoopError();
+        }
+        seenKeyIds.add(active.keyId);
+        currentKey = { ...active, witnessId };
+      }
+      // Verify THIS attestation against any published witness key, including
+      // retired entries — the drained signing machine's key lives there now.
+      for (const key of published) {
+        if (verify(key)) return;
+      }
+      if (discAttempt < config.maxAttempts) {
+        await sleep(backoffDelay(discAttempt, config));
+      }
+    }
+    throw new WitnessSignatureMismatchError(currentKey.keyId);
+  }
+
   async function signCommitment(request: WitnessRequest): Promise<WitnessSignResult> {
-    let seenKeyIds = new Set<string>([currentKey.keyId]);
+    const seenKeyIds = new Set<string>([currentKey.keyId]);
     let lastError: unknown;
     for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
       try {
@@ -151,21 +211,14 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
         if (witnessId && attestation.witness_id !== witnessId) {
           throw new WitnessResponseMismatchError("witness_id", witnessId, attestation.witness_id);
         }
-        let verified = verifyAttestation(attestation, currentKey);
-        if (!verified) {
-          const refreshed = await discovery.fetchWitnessKey();
-          const refreshedWithId: WitnessIdentity = { ...refreshed, witnessId };
-          if (refreshedWithId.keyId !== currentKey.keyId) {
-            if (seenKeyIds.has(refreshedWithId.keyId)) {
-              throw new WitnessKeyRotationLoopError();
-            }
-            seenKeyIds.add(refreshedWithId.keyId);
-            currentKey = refreshedWithId;
-            verified = verifyAttestation(attestation, currentKey);
-          }
-          if (!verified) {
-            throw new WitnessSignatureMismatchError(currentKey.keyId);
-          }
+        // A 200 POST already committed and billed this attestation. If it does
+        // not verify, resolve it by re-fetching discovery only — never by
+        // re-POSTing (see resolveMismatchByRediscovery).
+        if (!verifyAttestation(attestation, currentKey)) {
+          await resolveMismatchByRediscovery(
+            (key) => verifyAttestation(attestation, key),
+            seenKeyIds
+          );
         }
         return { attestation, agentIdentity };
       } catch (err) {
@@ -197,10 +250,10 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
   async function signSatellite(
     request: SatelliteSealRequest
   ): Promise<SatelliteWitnessAttestation> {
-    // Mirrors signCommitment: same retry/backoff and one-shot key-rotation
-    // refresh, but the seal covers satelliteContentHash (its own message
-    // domain) rather than a chain action.
-    let seenKeyIds = new Set<string>([currentKey.keyId]);
+    // Mirrors signCommitment: one POST, then a discovery-only mismatch
+    // resolution that never re-POSTs (the seal covers satelliteContentHash, its
+    // own message domain, rather than a chain action).
+    const seenKeyIds = new Set<string>([currentKey.keyId]);
     let lastError: unknown;
     for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
       try {
@@ -215,21 +268,14 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
         if (witnessId && attestation.witness_id !== witnessId) {
           throw new WitnessResponseMismatchError("witness_id", witnessId, attestation.witness_id);
         }
-        let verified = verifySatelliteAttestation(attestation, currentKey);
-        if (!verified) {
-          const refreshed = await discovery.fetchWitnessKey();
-          const refreshedWithId: WitnessIdentity = { ...refreshed, witnessId };
-          if (refreshedWithId.keyId !== currentKey.keyId) {
-            if (seenKeyIds.has(refreshedWithId.keyId)) {
-              throw new WitnessKeyRotationLoopError();
-            }
-            seenKeyIds.add(refreshedWithId.keyId);
-            currentKey = refreshedWithId;
-            verified = verifySatelliteAttestation(attestation, currentKey);
-          }
-          if (!verified) {
-            throw new WitnessSignatureMismatchError(currentKey.keyId);
-          }
+        // A 200 POST already committed and billed this satellite attestation. If
+        // it does not verify, resolve it by re-fetching discovery only — never by
+        // re-POSTing (see resolveMismatchByRediscovery).
+        if (!verifySatelliteAttestation(attestation, currentKey)) {
+          await resolveMismatchByRediscovery(
+            (key) => verifySatelliteAttestation(attestation, key),
+            seenKeyIds
+          );
         }
         return attestation;
       } catch (err) {

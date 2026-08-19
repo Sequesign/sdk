@@ -1,11 +1,5 @@
-import {
-  createHash,
-  createPrivateKey,
-  createPublicKey,
-  generateKeyPairSync,
-  sign as cryptoSign,
-  verify as cryptoVerify
-} from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
+import { ed25519 } from "@noble/curves/ed25519.js";
 export type DemoKeypair = { publicKeyPem: string; privateKeyPem: string };
 export function generateEd25519Keypair(): DemoKeypair {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -69,20 +63,17 @@ export function canonicalizeEd25519PublicKeyPem(pem: string): string {
 
 // True only for a well-formed Ed25519 public-key PEM. Use this to gate an
 // attestation as valid BEFORE fingerprinting/canonicalizing its key:
-// verifyEd25519 calls crypto.verify(null, ...), which also accepts other
-// EdDSA keys (e.g. Ed448), so a non-Ed25519 key can pass signature
-// verification yet throw when canonicalized. Gating here lets such an
-// attestation be dropped rather than aborting the whole verification.
+// canonicalizeEd25519PublicKeyPem throws on a non-Ed25519 key, so gating here
+// lets such an attestation be dropped rather than aborting the whole
+// verification.
 export function isEd25519PublicKeyPem(pem: string): boolean {
   return parseEd25519PublicKeyPem(pem).ok;
 }
 
-// True only for a well-formed Ed25519 PRIVATE-key PEM. signEd25519 calls
-// crypto.sign(null, ...), which also accepts other EdDSA private keys (e.g.
-// Ed448) and produces a signature of the wrong length (114 bytes vs the
-// 64-byte Ed25519 signature this format requires). A signer built on this
-// must gate the key here so it fails loud at signing time rather than
-// emitting an artifact every verifier rejects as malformed.
+// True only for a well-formed Ed25519 PRIVATE-key PEM. signEd25519 now rejects
+// a non-Ed25519 key outright (its PKCS#8 parser requires the Ed25519 OID and a
+// 32-byte seed), so this is a non-throwing pre-check for callers that want to
+// branch rather than catch.
 export function isEd25519PrivateKeyPem(pem: string): boolean {
   try {
     return createPrivateKey(pem).asymmetricKeyType === "ed25519";
@@ -90,8 +81,69 @@ export function isEd25519PrivateKeyPem(pem: string): boolean {
     return false;
   }
 }
+// Ed25519 sign/verify run the low-level curve op on @noble/curves rather than
+// node:crypto's sign()/verify(): the Cloudflare Workers/Pages runtime
+// (nodejs_compat) does NOT implement crypto.sign / crypto.verify — it throws
+// "[unenv] crypto.sign is not implemented yet!" — so the deployed live-seal
+// Functions could not sign at all. @noble is pure JS and produces byte-identical
+// RFC 8032 signatures (verified against node:crypto), so receipts remain
+// verifiable by Node verifiers and the witness. node:crypto's KeyObject
+// PARSERS (createPublicKey/createPrivateKey) ARE implemented at the edge, so we
+// still use them where they add validation.
+
+function pemBodyToDer(pem: string): Buffer {
+  return Buffer.from(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""), "base64");
+}
+
+// A DER TLV header: tag, and the [start, end) byte range of its content.
+function readTlv(der: Buffer, offset: number): { tag: number; start: number; end: number } {
+  if (offset + 2 > der.length) throw new Error("DER truncated");
+  const tag = der[offset];
+  let length = der[offset + 1];
+  let cursor = offset + 2;
+  if (length & 0x80) {
+    const lengthBytes = length & 0x7f;
+    if (lengthBytes === 0 || lengthBytes > 4) throw new Error("bad DER length");
+    length = 0;
+    for (let i = 0; i < lengthBytes; i++) length = length * 256 + der[cursor + i];
+    cursor += lengthBytes;
+  }
+  if (cursor + length > der.length) throw new Error("DER truncated");
+  return { tag, start: cursor, end: cursor + length };
+}
+
+// AlgorithmIdentifier OID for Ed25519 (1.3.101.112), as raw TLV bytes.
+const ED25519_OID_TLV = [0x06, 0x03, 0x2b, 0x65, 0x70];
+
+// Extract the 32-byte seed from an RFC 5958 OneAsymmetricKey (PKCS#8) DER by
+// WALKING the structure — SEQUENCE { version, AlgorithmIdentifier, privateKey
+// OCTET STRING { 0x04 0x20 seed } } — not by slicing the trailing 32 bytes: a
+// PKCS#8 v2 key carries an OPTIONAL publicKey field AFTER the seed, so the tail
+// would be the public key, producing signatures that fail verification. Throws
+// (not signs) on a non-Ed25519 key, so we never emit a bogus signature.
+// Mirrors pkcs8Ed25519Seed in apps/demo/src/live/seal.ts.
+function ed25519SeedFromPkcs8(der: Buffer): Buffer {
+  const outer = readTlv(der, 0);
+  if (outer.tag !== 0x30) throw new Error("not a PKCS#8 SEQUENCE");
+  const version = readTlv(der, outer.start);
+  if (version.tag !== 0x02) throw new Error("no PKCS#8 version field");
+  const algorithm = readTlv(der, version.end);
+  if (algorithm.tag !== 0x30) throw new Error("no AlgorithmIdentifier");
+  if (!ED25519_OID_TLV.every((b, i) => der[algorithm.start + i] === b)) {
+    throw new Error("not an Ed25519 private key");
+  }
+  const privateKey = readTlv(der, algorithm.end);
+  if (privateKey.tag !== 0x04) throw new Error("no privateKey OCTET STRING");
+  const inner = der.subarray(privateKey.start, privateKey.end);
+  if (inner.length !== 34 || inner[0] !== 0x04 || inner[1] !== 0x20) {
+    throw new Error("no 32-byte Ed25519 seed");
+  }
+  return inner.subarray(2, 34);
+}
+
 export function signEd25519(privateKeyPem: string, message: Buffer): string {
-  return cryptoSign(null, message, privateKeyPem).toString("base64");
+  const seed = ed25519SeedFromPkcs8(pemBodyToDer(privateKeyPem));
+  return Buffer.from(ed25519.sign(message, seed)).toString("base64");
 }
 export function verifyEd25519(
   publicKeyPem: string,
@@ -99,7 +151,20 @@ export function verifyEd25519(
   signatureBase64: string
 ): boolean {
   try {
-    return cryptoVerify(null, message, publicKeyPem, Buffer.from(signatureBase64, "base64"));
+    // createPublicKey validates the FULL SPKI (ASN.1 structure + Ed25519
+    // algorithm id), so a 44-byte blob with a usable trailing point but a wrong
+    // label/OID is rejected — matching the pre-@noble behavior. It is
+    // implemented at the edge (unlike crypto.verify). Export the canonical SPKI
+    // DER and take the 32-byte raw point for the curve op.
+    const key = createPublicKey(publicKeyPem);
+    if (key.asymmetricKeyType !== "ed25519") return false;
+    const publicKey = key.export({ type: "spki", format: "der" }).subarray(-32);
+    // zip215: false pins strict RFC 8032 verification. @noble defaults to
+    // zip215: true, which accepts non-canonical encodings node:crypto rejects —
+    // and untrusted approver/agent keys reach this helper.
+    return ed25519.verify(Buffer.from(signatureBase64, "base64"), message, publicKey, {
+      zip215: false
+    });
   } catch {
     return false;
   }

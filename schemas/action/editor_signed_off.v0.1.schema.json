@@ -1,0 +1,17 @@
+{
+  "schema_id": "sequesign.editor_signed_off.v0.1",
+  "type": "object",
+  "required": ["story_ref", "editor_ref", "content_hash"],
+  "properties": {
+    "story_ref": {
+      "type": "string"
+    },
+    "editor_ref": {
+      "type": "string"
+    },
+    "content_hash": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "schema_id": "sequesign.content_fact_checked.v0.1",
+  "type": "object",
+  "required": ["story_ref", "content_hash", "claims_checked"],
+  "properties": {
+    "story_ref": {
+      "type": "string"
+    },
+    "content_hash": {
+      "type": "string"
+    },
+    "claims_checked": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}
