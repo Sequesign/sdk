@@ -11,7 +11,11 @@
 // implementations that disagreed would be a security hazard, since the hash
 // they commit is what the offline verifier reproduces.
 
-import { loadProfileById } from "../lib/schema-registry.js";
+import {
+  bundledTemplateSource,
+  createTemplateResolver,
+  type TemplateResolver
+} from "../lib/template-source.js";
 import { sha256Prefixed } from "../lib/hash.js";
 import { bindParameters, paramsHash, type ParameterDeclarations } from "../lib/mandate-params.js";
 import { computeGenesisV0, computeGenesisV1 } from "../lib/genesis.js";
@@ -41,6 +45,29 @@ export interface GenesisBindingArgs {
   // registry sidecar is used instead). Undefined for an unsigned inline
   // template.
   profileAuthorSignature: ProfileSignatureSidecar | undefined;
+  // Template system Phase 2 (dynamic registry): the resolver used to resolve a
+  // profile_constrained session's WorkflowProfile when no inline document is
+  // supplied. Undefined -> a bundled-only resolver is constructed here, which is
+  // byte-for-byte equivalent to the previous loadProfileById path (fully offline,
+  // no configuration). A caller-supplied resolver (SdkConfig.templateResolver)
+  // can add a live/account-scoped registry with the bundled copy as fallback.
+  // This only affects DISCOVERY: the resolved document's hash is recomputed
+  // locally and checked against `profile.profile_hash` below, so a resolver can
+  // never weaken the genesis authentication.
+  templateResolver: TemplateResolver | undefined;
+}
+
+// Lazily constructed default resolver: bundled-only, matching the pre-dynamic
+// behavior. Reused across binds that do not pass a resolver. Safe to share —
+// bundledTemplateSource is stateless and, in bundled-only mode, the resolver's
+// cache is never READ (the single source is always reachable for a hit and
+// authoritatively reports a miss), so it cannot serve a stale cross-bind entry.
+let defaultBundledResolver: TemplateResolver | undefined;
+function bundledOnlyResolver(): TemplateResolver {
+  if (!defaultBundledResolver) {
+    defaultBundledResolver = createTemplateResolver({ sources: [bundledTemplateSource()] });
+  }
+  return defaultBundledResolver;
 }
 
 // Recursively freeze a plain JSON value so a retained snapshot cannot be
@@ -81,14 +108,31 @@ function jsonSnapshot(value: Record<string, unknown>): Record<string, unknown> {
 
 // Resolve a profile's document + canonical hash + author sidecar from either an
 // inline document (caller-supplied, e.g. a freshly published template) or the
-// bundled registry. Inline resolution uses sha256Prefixed — the SAME JCS
+// template resolver. Inline resolution uses sha256Prefixed — the SAME JCS
 // canonicalization the registry, the dashboard-api template store, and the
 // offline verifier use — so the hash is identical everywhere. Returns null only
-// for a registry miss; an inline document always resolves.
+// for a resolver miss; an inline document always resolves.
+//
+// `pin` controls resolver lookup:
+//   - A hash (the V1/parameterized path passes ref.profile_hash): resolve
+//     PINNED first, so the resolver skips any source that serves a different
+//     document under this id (a stale mirror or a hostile source) and falls
+//     through to the correctly-pinned bundled/cache copy — this is the
+//     anti-substitution fallback the resolver exists to provide. Only if the pin
+//     matches NO source do we resolve unpinned once more, purely to preserve the
+//     precise diagnostic downstream: a document that exists under this id but
+//     with a different hash yields the "hash mismatch" error (declared vs
+//     computed), while a genuine absence yields "unknown profile".
+//   - undefined (the V0 path passes the bundled-only resolver here): resolve
+//     unpinned/best-effort, matching the legacy behavior — the V0 embedded
+//     profile is not genesis-authenticated, so its hash is checked at finalize,
+//     not at bind.
 async function resolveProfileForBinding(
   ref: ProfileReference,
   inlineDocument: Record<string, unknown> | undefined,
-  inlineAuthorSignature: ProfileSignatureSidecar | undefined
+  inlineAuthorSignature: ProfileSignatureSidecar | undefined,
+  resolver: TemplateResolver,
+  pin: string | undefined
 ): Promise<{
   profile: Record<string, unknown>;
   profileHash: string;
@@ -128,10 +172,37 @@ async function resolveProfileForBinding(
       authorSignature: inlineAuthorSignature
     };
   }
-  const loaded = await loadProfileById(ref.profile_id);
+  // Registry resolution (no inline document): go through the template resolver.
+  if (pin !== undefined) {
+    // Pinned first — see the `pin` contract above. A hit here has a
+    // locally-recomputed hash equal to the pin, so the explicit check in
+    // resolveGenesisBinding trivially passes; the anti-substitution fallback
+    // (skip a mismatching source, use the pinned copy) has already happened
+    // inside the resolver.
+    const pinned = await resolver.resolveProfile(ref.profile_id, { expectedHash: pin });
+    if (pinned) {
+      return {
+        profile: pinned.profile,
+        profileHash: pinned.profileHash,
+        authorSignature: pinned.authorSignature
+      };
+    }
+    // No source matched the pin. Resolve unpinned only to diagnose: a document
+    // under this id with a DIFFERENT hash surfaces as the precise "hash
+    // mismatch" error via the explicit check; a true absence stays null ->
+    // "unknown profile".
+    const unpinned = await resolver.resolveProfile(ref.profile_id);
+    if (!unpinned) return null;
+    return {
+      profile: unpinned.profile,
+      profileHash: unpinned.profileHash,
+      authorSignature: unpinned.authorSignature
+    };
+  }
+  const loaded = await resolver.resolveProfile(ref.profile_id);
   if (!loaded) return null;
   return {
-    profile: loaded.profile as Record<string, unknown>,
+    profile: loaded.profile,
     profileHash: loaded.profileHash,
     authorSignature: loaded.authorSignature
   };
@@ -169,6 +240,12 @@ export interface GenesisBindingResult {
 export async function resolveGenesisBinding(
   args: GenesisBindingArgs
 ): Promise<GenesisBindingResult> {
+  // The resolver used for the PARAMETERIZED (V1) path: a caller-supplied one
+  // when present, else bundled-only (previous behavior). Discovery only — the
+  // resolved document's hash is pinned/re-checked (see resolveProfileForBinding
+  // and the explicit check below). The V0 path deliberately does NOT use this
+  // and stays bundled-only (see its call site for why).
+  const resolver = args.templateResolver ?? bundledOnlyResolver();
   // An inline profile document only makes sense as the concrete body of the
   // session's profile reference. Reject it without a reference rather than
   // silently ignoring it (which would produce a receipt bound to nothing).
@@ -203,7 +280,9 @@ export async function resolveGenesisBinding(
     const loaded = await resolveProfileForBinding(
       args.profile,
       args.profileDocument,
-      args.profileAuthorSignature
+      args.profileAuthorSignature,
+      resolver,
+      args.profile.profile_hash
     );
     if (!loaded) {
       throw new ParameterBindingError(args.profile.profile_id, [
@@ -273,9 +352,25 @@ export async function resolveGenesisBinding(
   // the V0 path's bind-time behavior. The embedded document's hash is checked
   // against profile_hash at finalize (evaluateMandate), so an inline document
   // that does not match its reference is caught there, not silently accepted.
+  //
+  // Resolve V0 from the BUNDLED-ONLY resolver, NOT any caller-supplied dynamic
+  // resolver: a V0 receipt's embedded profile is not genesis-authenticated, so
+  // the offline verifier distrusts it and falls back to the bundled registry.
+  // Embedding a dynamically-resolved, non-bundled document here would therefore
+  // produce a receipt that always fails offline verification (unknown_profile)
+  // AFTER work and witness side effects — the exact hazard that makes inline
+  // documents require params. Keeping V0 bundled-only both avoids that footgun
+  // and preserves the legacy V0 contract byte-for-byte (dynamic resolution is
+  // meaningfully a V1/parameterized-only capability).
   let profileDocument: Record<string, unknown> | undefined;
   if (profileRef) {
-    const loaded = await resolveProfileForBinding(profileRef, args.profileDocument, undefined);
+    const loaded = await resolveProfileForBinding(
+      profileRef,
+      args.profileDocument,
+      undefined,
+      bundledOnlyResolver(),
+      undefined
+    );
     profileDocument = loaded?.profile;
   }
   return {

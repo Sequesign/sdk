@@ -47,7 +47,8 @@ export function createSequesign(options: SdkConfig = {}): Sdk {
         }
         return startSessionImpl(
           init as SessionInit & { package: NonNullable<SessionInit["package"]> },
-          witnessDefaults
+          witnessDefaults,
+          resolved.templateResolver
         );
       },
       async resumeSession(
@@ -75,7 +76,7 @@ export function createSequesign(options: SdkConfig = {}): Sdk {
         });
       },
       async witness(input: WitnessInput): Promise<WitnessResult> {
-        return witnessOneShotDirect(input, witnessDefaults);
+        return witnessOneShotDirect(input, witnessDefaults, resolved.templateResolver);
       },
       async submitApprovalSatellite(input: SubmitApprovalSatelliteInput) {
         return submitApprovalSatelliteImpl(input, resolved);
@@ -121,7 +122,8 @@ export function createSequesign(options: SdkConfig = {}): Sdk {
 // temporary path.
 async function witnessOneShotDirect(
   input: WitnessInput,
-  witnessDefaults: SdkConfig["witness"]
+  witnessDefaults: SdkConfig["witness"],
+  templateResolver: SdkConfig["templateResolver"]
 ): Promise<WitnessResult> {
   let packageDir: string;
   let ownsTemp: boolean;
@@ -147,7 +149,8 @@ async function witnessOneShotDirect(
         receiptId: input.receiptId,
         package: { directory: packageDir, ifExists }
       },
-      witnessDefaults
+      witnessDefaults,
+      templateResolver
     );
     await session.recordAction({
       actionType: input.actionType,
@@ -291,6 +294,28 @@ export type { DecodedAuthorAttestation } from "../lib/author-attestation.js";
 // post-hoc evaluateMandate conformance grade.
 export { checkAction } from "../lib/check-action.js";
 export type { CheckActionInput, CheckActionResult } from "../lib/check-action.js";
+
+// Dynamic template registry — Phase 1 (issue #440): the template-source
+// abstraction so consumers can resolve a mandate template from more than the
+// bundled package files (a remote registry, a warm cache) without weakening the
+// trust model — fetching is discovery-only; profile_hash is always computed
+// locally and pins reject substitution. Surfaced from the SDK root so these are
+// importable from @sequesign/sdk (and included in the mirror's import closure).
+export {
+  bundledTemplateSource,
+  remoteTemplateSource,
+  inMemoryTemplateCache,
+  createTemplateResolver
+} from "../lib/template-source.js";
+export type {
+  LoadedTemplate,
+  TemplateSource,
+  TemplateCache,
+  TemplateResolver,
+  TemplateResolverConfig,
+  RemoteTemplateSourceConfig,
+  ResolveOptions
+} from "../lib/template-source.js";
 
 export type {
   Sdk,

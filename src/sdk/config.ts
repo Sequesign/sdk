@@ -7,6 +7,10 @@ export type ResolvedSdkConfig =
   | {
       mode: "direct";
       witness: SdkConfig["witness"];
+      // Template system Phase 2: optional dynamic template resolver, carried
+      // through to the genesis binding for both modes. Undefined -> the binder
+      // constructs a bundled-only resolver (previous behavior).
+      templateResolver?: SdkConfig["templateResolver"];
     }
   | {
       mode: "managed";
@@ -94,7 +98,7 @@ export function resolveSdkConfig(input: SdkConfig | undefined): ResolvedSdkConfi
         'evidenceCustody and envelopeCustody only apply in managed mode. Set mode to "managed", or remove these parameters.'
       );
     }
-    return { mode: "direct", witness: cfg.witness };
+    return { mode: "direct", witness: cfg.witness, templateResolver: cfg.templateResolver };
   }
 
   // mode === "managed"
@@ -102,6 +106,18 @@ export function resolveSdkConfig(input: SdkConfig | undefined): ResolvedSdkConfi
     throw new SdkConfigError(
       "witness_not_allowed_in_managed_mode",
       'mode is "managed"; the SDK talks to the broker, not directly to the witness. Remove the witness config and supply broker instead.'
+    );
+  }
+  if (cfg.templateResolver !== undefined) {
+    // A client-side template resolver only affects bind-time discovery in the
+    // caller's process. In managed mode the broker re-resolves the profile from
+    // its own registry at finalize (this is also why inline profileDocument is
+    // rejected in managed mode), so a client resolver has no effect and, worse,
+    // could bind a template the broker cannot finalize. Reject it explicitly
+    // rather than silently ignore it.
+    throw new SdkConfigError(
+      "template_resolver_not_allowed_in_managed_mode",
+      'mode is "managed"; the broker resolves templates from its own registry, so a client-side templateResolver has no effect. Remove templateResolver, or use direct mode to control template resolution client-side.'
     );
   }
   if (!managedEndpoint) {

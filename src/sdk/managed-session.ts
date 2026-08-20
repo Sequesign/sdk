@@ -178,7 +178,11 @@ export async function startManagedSessionImpl(args: {
       profile: init.profile,
       params: init.params,
       profileDocument: init.profileDocument,
-      profileAuthorSignature: init.profileAuthorSignature
+      profileAuthorSignature: init.profileAuthorSignature,
+      // Managed mode resolves templates on the broker side; the client always
+      // uses the bundled-only resolver here (a client resolver is rejected at
+      // config time — see resolveSdkConfig).
+      templateResolver: undefined
     });
 
   const state = new SessionState({

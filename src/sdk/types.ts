@@ -20,6 +20,7 @@ import type {
   WitnessAttestation
 } from "../lib/types.js";
 import type { WitnessAgentIdentity } from "../lib/witness-types.js";
+import type { TemplateResolver } from "../lib/template-source.js";
 
 export type {
   ActionRecord,
@@ -111,6 +112,20 @@ export interface SdkDefaults {
   evidenceCustody?: EvidenceCustody;
   envelopeCustody?: EnvelopeCustody;
   evidenceEncryption?: EvidenceEncryption;
+  // Template system Phase 2 (dynamic registry): an optional resolver the SDK
+  // uses to resolve a profile_constrained session's WorkflowProfile at bind
+  // time (in place of the bundled-only file loader). Omit for the default,
+  // fully offline behavior — the SDK then constructs a bundled-only resolver
+  // internally, which is byte-for-byte equivalent to the previous
+  // loadProfileById path. Supply one built with `createTemplateResolver` (e.g.
+  // `[remoteTemplateSource(...), bundledTemplateSource()]`) to prefer a live,
+  // account-scoped registry with the bundled copy as the offline fallback.
+  //
+  // Trust is unaffected: the committed profile_hash is recomputed locally over
+  // whatever document is resolved and checked at bind time (and again by the
+  // offline verifier at finalize), so a resolver — including a remote or custom
+  // source — can only widen DISCOVERY, never weaken authentication.
+  templateResolver?: TemplateResolver;
 }
 
 // Canonical new name for the SDK construction options. `SdkDefaults`

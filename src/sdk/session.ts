@@ -6,6 +6,7 @@ import { verifyEd25519 } from "../lib/keys.js";
 import { approvalMessage } from "../lib/messages.js";
 import { evaluateMandate } from "../lib/profile.js";
 import { resolveGenesisBinding } from "./genesis-binding.js";
+import type { TemplateResolver } from "../lib/template-source.js";
 import { verifyReceiptPackage, witnessKeysFromReceipt } from "../lib/verify.js";
 import { applySchemaPolicy } from "./schema-policy.js";
 import { isCanonicalCounterpartyId, isValidApproverId } from "../lib/package-layout.js";
@@ -84,7 +85,8 @@ import {
 import { InclusionProofTimeoutError } from "./errors.js";
 export async function startSessionImpl(
   init: SessionInit,
-  sdkWitnessDefaults: WitnessConfig | undefined
+  sdkWitnessDefaults: WitnessConfig | undefined,
+  templateResolver?: TemplateResolver
 ): Promise<Session> {
   const mergedWitnessConfig = resolveWitnessConfig(init.witness, sdkWitnessDefaults);
 
@@ -148,7 +150,8 @@ export async function startSessionImpl(
       profile: init.profile,
       params: init.params,
       profileDocument: init.profileDocument,
-      profileAuthorSignature: init.profileAuthorSignature
+      profileAuthorSignature: init.profileAuthorSignature,
+      templateResolver
     });
 
   const writer = createPackageWriter(pkg.directory);
