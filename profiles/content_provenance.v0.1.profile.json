@@ -17,6 +17,8 @@
     ["START", "sources_gathered"],
     ["sources_gathered", "content_drafted"],
     ["content_drafted", "content_fact_checked"],
+    ["content_drafted", "editor_signed_off"],
+    ["content_drafted", "content_published"],
     ["content_fact_checked", "editor_signed_off"],
     ["content_fact_checked", "content_published"],
     ["editor_signed_off", "content_published"]

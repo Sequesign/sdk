@@ -16,6 +16,7 @@
   "allowed_transitions": [
     ["START", "flight_dispatched"],
     ["flight_dispatched", "sector_entered"],
+    ["flight_dispatched", "flight_recovered"],
     ["sector_entered", "sector_entered"],
     ["sector_entered", "inspection_captured"],
     ["inspection_captured", "inspection_captured"],
