@@ -140,6 +140,22 @@ export async function startManagedSessionImpl(args: {
   // SessionState, and run the same client-side validation direct
   // mode runs.
 
+  // Inline template documents (SessionInit.profileDocument) are a direct-mode
+  // feature. finalize() forwards only boundParams to the broker, which
+  // re-resolves the profile from its own registry (loadProfileById) and would
+  // reject an inline template it has never seen as unknown_profile. Binding one
+  // locally in managed mode would therefore produce a receipt that can never
+  // finalize, so reject it up front with a clear diagnostic rather than failing
+  // late at finalize. (Managed inline templates would require the broker to
+  // receive, hash-verify, and use the embedded document — out of scope here.)
+  if (init.profileDocument !== undefined) {
+    throw new NotImplementedError(
+      "Inline template documents (SessionInit.profileDocument) are not supported in managed " +
+        "mode: the broker re-resolves the profile from its registry at finalize, so a template " +
+        "it has not seen cannot be finalized. Use direct mode for inline templates."
+    );
+  }
+
   const intermediary = createIntermediaryClient(managed.intermediary);
 
   const chainId = init.chainId ?? generateChainId();
@@ -160,7 +176,9 @@ export async function startManagedSessionImpl(args: {
       delegatorId: init.task.delegatorId,
       agentId: init.agent.agentId,
       profile: init.profile,
-      params: init.params
+      params: init.params,
+      profileDocument: init.profileDocument,
+      profileAuthorSignature: init.profileAuthorSignature
     });
 
   const state = new SessionState({

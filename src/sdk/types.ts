@@ -12,6 +12,7 @@ import type {
   ApprovalAttestation,
   IdentityProof,
   ProfileReference,
+  ProfileSignatureSidecar,
   ReceiptMode,
   SchemaReference,
   VerifiabilityClass,
@@ -34,6 +35,7 @@ export type {
   ApprovalAttestation,
   IdentityProof,
   ProfileReference,
+  ProfileSignatureSidecar,
   ReceiptMode,
   SchemaReference,
   VerifiabilityClass,
@@ -134,6 +136,31 @@ export interface SessionInit {
   };
   mode?: ReceiptMode;
   profile?: ProfileReference;
+  // Inline template document (template library). When set, the session binds to
+  // THIS WorkflowProfile instead of resolving `profile.profile_id` from the
+  // SDK's bundled registry — so you can run a profile_constrained session
+  // against a template you just published to the library (or any template not
+  // shipped with the SDK). Requires `profile`, and `profile.profile_hash` must
+  // equal this document's canonical hash (sha256 over its JCS form); a mismatch
+  // is rejected. The document is embedded in the package (profile.json).
+  //
+  // REQUIRES `params` (the template must declare `parameters`). Only a
+  // parameterized session commits profile_hash into the signed chain genesis
+  // (SEQUESIGN_GENESIS_V1), which is what authenticates the embedded
+  // profile.json for an offline verifier. An unparameterized inline template is
+  // NOT genesis-authenticated, so the verifier falls back to the bundled
+  // registry — and for a template not shipped in the SDK that fallback misses
+  // and finalize fails as unknown_profile. `startSession` therefore rejects
+  // `profileDocument` supplied without `params` up front (see verify.ts
+  // trustEmbedded = hasParamsHash).
+  //
+  // Omit to use the bundled registry, as before.
+  profileDocument?: Record<string, unknown>;
+  // Optional template-author signature sidecar for an inline `profileDocument`,
+  // embedded as profile.sig.json on the parameterized path so the verifier can
+  // grade template_authenticity. Ignored without `profileDocument`. Omit for an
+  // unsigned template.
+  profileAuthorSignature?: ProfileSignatureSidecar;
   // Parameter values bound to a parameterized profile (template system).
   // Requires `profile`. At session start the values are validated + bound
   // against the profile's `parameters` declarations; the resulting

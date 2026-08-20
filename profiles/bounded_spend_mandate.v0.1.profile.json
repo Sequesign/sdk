@@ -1,0 +1,29 @@
+{
+  "profile_id": "sequesign.bounded_spend_mandate.v0.1",
+  "description": "A bounded-spend mandate for an autonomous agent that purchases paid resources (search APIs, licensed data, compute) to complete a task. Each receipt records ONE resource_purchased action, capped at the bound max_amount per purchase in the bound currency, and confined to the bound allowed_categories. amount is bounded [0, max_amount], so a purchase over the per-purchase cap is nonconformant (and a negative max_amount ceiling yields an empty range, failing closed); category must be one of allowed_categories, so a purchase in an unbudgeted category is nonconformant; currency is pinned to the bound currency. Evidence is closed (additionalProperties:false) so no unmodeled field rides along. The verifier enforces the shape and these bound bounds, not the meaning of the free-text resource/purchase_id/task_ref fields — populating them with opaque references rather than sensitive payloads is the integrator's contract. Each purchase is its own single-action chain, so a spend statement is a set of independently verifiable receipts and the aggregate task budget is enforced by the presenter, not sealed per receipt.",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "max_amount": { "type": "number", "required": true },
+    "currency": { "type": "string", "default": "USD" },
+    "allowed_categories": { "type": "array", "required": true }
+  },
+  "allowed_actions": ["resource_purchased"],
+  "required_actions": ["resource_purchased"],
+  "allowed_transitions": [["START", "resource_purchased"]],
+  "allowed_final_actions": ["resource_purchased"],
+  "evidence_schemas": {
+    "resource_purchased": {
+      "type": "object",
+      "required": ["purchase_id", "resource", "category", "amount", "currency", "task_ref"],
+      "properties": {
+        "purchase_id": { "type": "string" },
+        "resource": { "type": "string" },
+        "category": { "$allowlist": "allowed_categories" },
+        "amount": { "type": "number", "minimum": 0, "maximum": { "$param": "max_amount" } },
+        "currency": { "const": { "$param": "currency" } },
+        "task_ref": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

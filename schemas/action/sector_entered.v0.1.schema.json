@@ -1,0 +1,18 @@
+{
+  "schema_id": "sequesign.sector_entered.v0.1",
+  "type": "object",
+  "required": ["mission_ref", "sector", "altitude_ft"],
+  "properties": {
+    "mission_ref": {
+      "type": "string"
+    },
+    "sector": {
+      "type": "string"
+    },
+    "altitude_ft": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

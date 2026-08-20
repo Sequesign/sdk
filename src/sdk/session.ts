@@ -146,7 +146,9 @@ export async function startSessionImpl(
       delegatorId: init.task.delegatorId,
       agentId: init.agent.agentId,
       profile: init.profile,
-      params: init.params
+      params: init.params,
+      profileDocument: init.profileDocument,
+      profileAuthorSignature: init.profileAuthorSignature
     });
 
   const writer = createPackageWriter(pkg.directory);

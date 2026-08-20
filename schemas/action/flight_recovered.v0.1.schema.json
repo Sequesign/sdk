@@ -1,0 +1,18 @@
+{
+  "schema_id": "sequesign.flight_recovered.v0.1",
+  "type": "object",
+  "required": ["mission_ref", "base"],
+  "properties": {
+    "mission_ref": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string"
+    },
+    "frames_sealed": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

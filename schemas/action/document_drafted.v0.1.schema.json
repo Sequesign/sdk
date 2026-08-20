@@ -1,0 +1,20 @@
+{
+  "schema_id": "sequesign.document_drafted.v0.1",
+  "type": "object",
+  "required": ["matter_ref", "doc_type", "document_hash"],
+  "properties": {
+    "matter_ref": {
+      "type": "string"
+    },
+    "doc_type": {
+      "type": "string"
+    },
+    "document_hash": {
+      "type": "string"
+    },
+    "title_hash": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

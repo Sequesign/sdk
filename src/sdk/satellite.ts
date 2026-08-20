@@ -268,6 +268,17 @@ export async function submitApprovalSatelliteImpl(
   // 1. Build / validate the inner approval, mirroring session.recordApproval.
   let approval: ApprovalAttestation;
   if (input.mode === "sign_locally") {
+    // Gate the approver key BEFORE signing. signEd25519 now refuses a
+    // non-Ed25519 private key (it parses the PKCS#8 Ed25519 structure), which
+    // would surface as a generic error from inside buildApprovalAttestation;
+    // validate here so a non-Ed25519 approver key fails with the specific
+    // approver_key_not_ed25519 the attach_signed path and the verifier report.
+    if (!isEd25519PublicKeyPem(input.approverKeypair.publicKeyPem)) {
+      throw new ApprovalError(
+        "approver_key_not_ed25519",
+        "approver keypair is not an Ed25519 key; the verifier accepts only Ed25519 approver keys and would drop this approval."
+      );
+    }
     approval = buildApprovalAttestation({
       approvalId: input.approvalId ?? generateApprovalId(),
       approverId: input.approverId,
@@ -433,6 +444,15 @@ export async function submitCounterpartySatelliteImpl(
   // attach_signed (mode omitted for back-compat) takes a pre-signed attestation.
   let counterparty: CounterpartyAttestation;
   if (input.mode === "sign_locally") {
+    // Gate the counterparty key BEFORE signing, for the same reason as the
+    // approval path: signEd25519 refuses a non-Ed25519 private key, so surface
+    // the specific counterparty_key_not_ed25519 rather than a generic throw.
+    if (!isEd25519PublicKeyPem(input.counterpartyKeypair.publicKeyPem)) {
+      throw new CounterpartyAttestationError(
+        "counterparty_key_not_ed25519",
+        "counterparty keypair is not an Ed25519 key; the verifier accepts only Ed25519 counterparty keys and would drop this attestation."
+      );
+    }
     const targetForSigning = receipt.evidence_references.find(
       (e) => e.action_id === input.attestedActionId
     );

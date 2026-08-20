@@ -1,0 +1,80 @@
+{
+  "profile_id": "sequesign.content_provenance.v0.1",
+  "description": "An editorial mandate for an AI-assisted newsroom agent that drafts and publishes a story. The chain runs sources_gathered -> content_drafted -> content_fact_checked -> (editor_signed_off?) -> content_published (sign-off and fact-check are optional actions; sourcing, drafting, and publishing are required). Two conformance levers: sources_gathered must name a primary_source and every source it lists (the required primary_source plus any additional_sources) must be one of allowed_sources (a story built on an off-allowlist source is nonconformant, and a story that names no source at all cannot even be sealed because primary_source is required), and the published story's signoff_status must be \"signed_off\" (a story auto-published without a human editor sign-off is nonconformant). The two are independent: an off-allowlist source fails even a signed-off story, and an auto-published story fails even one built entirely on allowlisted sources. A conditional requirement closes the honesty gap: any content_published that claims signoff_status \"signed_off\" MUST be preceded by an editor_signed_off action, so the published claim cannot assert a sign-off that never happened. The story is bound end to end (evidence_bindings): the fact-check, the sign-off, and the publish must all carry the SAME content_hash and story_ref that were drafted, so a chain cannot draft one story and publish a different one. Evidence is closed (additionalProperties:false). The article text and the model prompt are sealed only as sha256 hashes (content_hash, prompt_hash); the sources, model id, editor reference, claims-checked count, and sign-off status are public masthead facts sealed in the clear. The verifier enforces the shape, the allowlist, the sign-off status, the conditional requirement, and the bindings.",
+  "receipt_mode": "profile_constrained",
+  "parameters": {
+    "allowed_sources": { "type": "array", "required": true }
+  },
+  "allowed_actions": [
+    "sources_gathered",
+    "content_drafted",
+    "content_fact_checked",
+    "editor_signed_off",
+    "content_published"
+  ],
+  "required_actions": ["sources_gathered", "content_drafted", "content_published"],
+  "allowed_transitions": [
+    ["START", "sources_gathered"],
+    ["sources_gathered", "content_drafted"],
+    ["content_drafted", "content_fact_checked"],
+    ["content_drafted", "editor_signed_off"],
+    ["content_fact_checked", "editor_signed_off"],
+    ["content_fact_checked", "content_published"],
+    ["editor_signed_off", "content_published"]
+  ],
+  "allowed_final_actions": ["content_published"],
+  "evidence_schemas": {
+    "sources_gathered": {
+      "type": "object",
+      "required": ["story_ref", "primary_source"],
+      "properties": {
+        "story_ref": { "type": "string" },
+        "primary_source": { "$allowlist": "allowed_sources" },
+        "additional_sources": {
+          "type": "array",
+          "items": { "$allowlist": "allowed_sources" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "content_published": {
+      "type": "object",
+      "required": ["story_ref", "content_hash", "signoff_status"],
+      "properties": {
+        "story_ref": { "type": "string" },
+        "content_hash": { "type": "string" },
+        "url": { "type": "string" },
+        "signoff_status": { "const": "signed_off" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "conditional_requirements": [
+    {
+      "if_action": "content_published",
+      "field_path": "content.signoff_status",
+      "equals": "signed_off",
+      "required_prior_to": {
+        "action": "content_published",
+        "must_include": "editor_signed_off"
+      }
+    }
+  ],
+  "evidence_bindings": [
+    {
+      "from_action": "content_drafted",
+      "to_action": "content_fact_checked",
+      "fields": ["story_ref", "content_hash"]
+    },
+    {
+      "from_action": "content_drafted",
+      "to_action": "editor_signed_off",
+      "fields": ["story_ref", "content_hash"]
+    },
+    {
+      "from_action": "content_drafted",
+      "to_action": "content_published",
+      "fields": ["story_ref", "content_hash"]
+    }
+  ]
+}

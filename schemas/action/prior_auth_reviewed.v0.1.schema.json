@@ -1,0 +1,51 @@
+{
+  "schema_id": "sequesign.prior_auth_reviewed.v0.1",
+  "type": "object",
+  "required": ["patient_ref", "provider_ref", "record_hash", "payer", "service_codes", "decision"],
+  "properties": {
+    "patient_ref": {
+      "type": "string"
+    },
+    "provider_ref": {
+      "type": "string"
+    },
+    "record_hash": {
+      "type": "string"
+    },
+    "payer": {
+      "type": "string"
+    },
+    "service_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["submit", "deny", "needs_info"]
+    },
+    "justification_ref": {
+      "type": "string"
+    },
+    "model_provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "raw_response": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

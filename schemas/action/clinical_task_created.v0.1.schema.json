@@ -1,0 +1,26 @@
+{
+  "schema_id": "sequesign.clinical_task_created.v0.1",
+  "type": "object",
+  "required": ["task_id", "workflow", "delegator_id", "record_hash"],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "workflow": {
+      "type": "string"
+    },
+    "delegator_id": {
+      "type": "string"
+    },
+    "record_hash": {
+      "type": "string"
+    },
+    "patient_ref": {
+      "type": "string"
+    },
+    "requested_condition": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

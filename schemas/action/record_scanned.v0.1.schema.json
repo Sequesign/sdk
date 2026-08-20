@@ -1,0 +1,48 @@
+{
+  "schema_id": "sequesign.record_scanned.v0.1",
+  "type": "object",
+  "required": ["patient_ref", "record_hash", "requested_condition", "findings"],
+  "properties": {
+    "patient_ref": {
+      "type": "string"
+    },
+    "record_hash": {
+      "type": "string"
+    },
+    "requested_condition": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "record_location_hash", "evidence_span_hash"],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "record_location_hash": {
+            "type": "string"
+          },
+          "evidence_span_hash": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "model_provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "raw_response": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

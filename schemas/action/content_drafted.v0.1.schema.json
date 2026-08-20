@@ -1,0 +1,20 @@
+{
+  "schema_id": "sequesign.content_drafted.v0.1",
+  "type": "object",
+  "required": ["story_ref", "model", "content_hash"],
+  "properties": {
+    "story_ref": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "prompt_hash": {
+      "type": "string"
+    },
+    "content_hash": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

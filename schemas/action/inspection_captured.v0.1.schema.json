@@ -1,0 +1,28 @@
+{
+  "schema_id": "sequesign.inspection_captured.v0.1",
+  "type": "object",
+  "required": ["mission_ref", "target", "frame_count", "sector", "altitude_ft", "imagery_hash"],
+  "properties": {
+    "mission_ref": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "frame_count": {
+      "type": "number",
+      "minimum": 0
+    },
+    "sector": {
+      "type": "string"
+    },
+    "altitude_ft": {
+      "type": "number",
+      "minimum": 0
+    },
+    "imagery_hash": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

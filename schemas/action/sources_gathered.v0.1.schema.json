@@ -1,0 +1,20 @@
+{
+  "schema_id": "sequesign.sources_gathered.v0.1",
+  "type": "object",
+  "required": ["story_ref", "primary_source"],
+  "properties": {
+    "story_ref": {
+      "type": "string"
+    },
+    "primary_source": {
+      "type": "string"
+    },
+    "additional_sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}
