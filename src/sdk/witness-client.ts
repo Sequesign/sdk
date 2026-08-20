@@ -176,8 +176,20 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
         }
         throw err;
       }
-      // published[0] is the active key; adopt it for future signing if it
-      // rotated, guarding against a ping-pong back to a key we already tried.
+      // Verify THIS attestation against any published witness key FIRST,
+      // including retired entries — the drained signing machine's key lives
+      // there now. This MUST precede the rotation-loop guard below: during an HA
+      // cutover the document that pings the active key back to one we already
+      // tried can still carry the (now-retired) signing key, so an already-billed
+      // attestation must be allowed to resolve against it rather than be rejected
+      // as a loop before it is ever checked.
+      for (const key of published) {
+        if (verify(key)) return;
+      }
+      // This document did not resolve the attestation. published[0] is the active
+      // key; adopt it for future signing if it rotated, guarding against a
+      // ping-pong back to a key we already tried — which, with no verifying key
+      // in this document, is a genuine (non-resolvable) rotation loop.
       const active = published[0];
       if (active && active.keyId !== currentKey.keyId) {
         if (seenKeyIds.has(active.keyId)) {
@@ -185,11 +197,6 @@ export async function connectWitness(config: ResolvedWitnessConfig): Promise<Wit
         }
         seenKeyIds.add(active.keyId);
         currentKey = { ...active, witnessId };
-      }
-      // Verify THIS attestation against any published witness key, including
-      // retired entries — the drained signing machine's key lives there now.
-      for (const key of published) {
-        if (verify(key)) return;
       }
       if (discAttempt < config.maxAttempts) {
         await sleep(backoffDelay(discAttempt, config));
