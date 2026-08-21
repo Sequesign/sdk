@@ -295,6 +295,14 @@ export type { DecodedAuthorAttestation } from "../lib/author-attestation.js";
 export { checkAction } from "../lib/check-action.js";
 export type { CheckActionInput, CheckActionResult } from "../lib/check-action.js";
 
+// The dependency-free JSON Schema validator behind evidence validation, surfaced
+// so a consumer that resolves a registered action schema (loadSchemaByActionType /
+// loadSchemaById) can reproduce the exact record-time evidence check — e.g. the
+// MCP's sequesign_check_action pre-flight mirrors record_action's recording-schema
+// gate for registry templates whose own evidence_schema may be more permissive.
+export { validateJsonSchema } from "../lib/schema-validation.js";
+export type { JsonSchema, SchemaValidationResult } from "../lib/schema-validation.js";
+
 // Dynamic template registry — Phase 1 (issue #440): the template-source
 // abstraction so consumers can resolve a mandate template from more than the
 // bundled package files (a remote registry, a warm cache) without weakening the
